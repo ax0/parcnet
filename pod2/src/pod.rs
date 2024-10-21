@@ -6,10 +6,9 @@ use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::field::types::Field;
 use plonky2::field::types::PrimeField64;
 
-use crate::schnorr::SchnorrPublicKey;
-use crate::schnorr::SchnorrSecretKey;
-use crate::schnorr::SchnorrSignature;
-use crate::schnorr::SchnorrSigner;
+use crate::signature::schnorr::{
+    SchnorrPublicKey, SchnorrSecretKey, SchnorrSignature, SchnorrSigner,
+};
 
 use entry::Entry;
 use gadget::GadgetID;
