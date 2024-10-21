@@ -120,6 +120,12 @@ impl SchnorrSigner {
     }
 }
 
+impl Default for SchnorrSigner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use plonky2::field::goldilocks_field::GoldilocksField;
