@@ -12,3 +12,5 @@ plonky2 = { git = "https://github.com/mir-protocol/plonky2" }
 anyhow = "1.0.56"
 rand = "0.8.5"
 log = "0.4.22"
+env_logger = "0.10.0"
+hashbrown = { version = "0.14.3", default-features = false, features = ["ahash", "serde"] }
