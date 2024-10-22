@@ -6,10 +6,9 @@ use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::field::types::Field;
 use plonky2::field::types::PrimeField64;
 
-use crate::schnorr::SchnorrPublicKey;
-use crate::schnorr::SchnorrSecretKey;
-use crate::schnorr::SchnorrSignature;
-use crate::schnorr::SchnorrSigner;
+use crate::signature::schnorr::{
+    SchnorrPublicKey, SchnorrSecretKey, SchnorrSignature, SchnorrSigner,
+};
 
 use entry::Entry;
 use gadget::GadgetID;
@@ -54,7 +53,6 @@ impl POD {
                 }
 
                 let payload_hash = self.payload.hash_payload();
-                let payload_hash_vec = vec![payload_hash];
                 let protocol = SchnorrSigner::new();
 
                 let pk: GoldilocksField = self
@@ -67,7 +65,11 @@ impl POD {
                         _ => Err(anyhow!("Invalid signer entry in payload")),
                     })?;
 
-                Ok(protocol.verify(&p, &payload_hash_vec, &SchnorrPublicKey { pk }))
+                Ok(protocol.verify(
+                    &p,
+                    &payload_hash.elements.to_vec(),
+                    &SchnorrPublicKey { pk },
+                ))
             }
 
             PODProof::Oracle(p) => {
@@ -76,12 +78,11 @@ impl POD {
                 }
 
                 let payload_hash = self.payload.hash_payload();
-                let payload_hash_vec = vec![payload_hash];
                 let protocol = SchnorrSigner::new();
 
                 Ok(protocol.verify(
                     &p,
-                    &payload_hash_vec,
+                    &payload_hash.elements.to_vec(),
                     &protocol.keygen(&SchnorrSecretKey { sk: 0 }), // hardcoded secret key
                 ))
             }
@@ -113,7 +114,7 @@ impl POD {
 
         let payload = PODPayload::new(&statement_map);
         let payload_hash = payload.hash_payload();
-        let proof = protocol.sign(&[payload_hash], sk, &mut rng);
+        let proof = protocol.sign(&payload_hash.elements.to_vec(), sk, &mut rng);
         Self {
             payload,
             proof: PODProof::Schnorr(proof),
@@ -138,14 +139,17 @@ impl POD {
         let mut rng: rand::rngs::ThreadRng = rand::thread_rng();
         let protocol = SchnorrSigner::new();
         let payload_hash = out_payload.hash_payload();
-        let payload_hash_vec = vec![payload_hash];
 
         // signature is a hardcoded skey (currently 0)
         // todo is to build a limited version of this with a ZKP
         // would start by making it so that the ZKP only allows
         // a max number of input PODs, max number of entries/statements per input POD,
         // max number of statements for output POD, and some max number of each type of operation
-        let proof = protocol.sign(&payload_hash_vec, &SchnorrSecretKey { sk: 0 }, &mut rng);
+        let proof = protocol.sign(
+            &payload_hash.elements.to_vec(),
+            &SchnorrSecretKey { sk: 0 },
+            &mut rng,
+        );
         Ok(Self {
             payload: out_payload,
             proof: PODProof::Oracle(proof),
