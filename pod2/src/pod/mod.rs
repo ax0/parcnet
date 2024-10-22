@@ -1,25 +1,23 @@
-use std::collections::HashMap;
-
 use anyhow::anyhow;
 use anyhow::Result;
 use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::field::types::Field;
 use plonky2::field::types::PrimeField64;
+use std::collections::HashMap;
 
+use crate::pod::{
+    entry::Entry,
+    gadget::GadgetID,
+    payload::{HashablePayload, PODPayload},
+    value::ScalarOrVec,
+};
 use crate::signature::schnorr::{
     SchnorrPublicKey, SchnorrSecretKey, SchnorrSignature, SchnorrSigner,
 };
 
-use entry::Entry;
-use gadget::GadgetID;
-use payload::{HashablePayload, PODPayload};
-use value::ScalarOrVec;
-
 use operation::OperationCmd as OpCmd;
-
 use statement::Statement;
 
-pub mod circuit;
 pub mod entry;
 pub mod gadget;
 pub mod operation;
@@ -27,7 +25,10 @@ pub mod origin;
 pub mod payload;
 pub mod statement;
 pub mod util;
-mod value;
+pub mod value;
+
+// submodule
+pub mod circuit;
 
 pub const SIGNER_PK_KEY: &str = "_signer";
 
