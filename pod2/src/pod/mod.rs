@@ -330,10 +330,6 @@ impl GPGInput {
 #[cfg(test)]
 mod tests {
     use operation::Operation as Op;
-    use plonky2::{
-        iop::witness::PartialWitness,
-        plonk::config::{GenericConfig, PoseidonGoldilocksConfig},
-    };
     use statement::StatementRef;
 
     use super::*;

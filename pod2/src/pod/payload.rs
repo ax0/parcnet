@@ -1,10 +1,10 @@
 use plonky2::{
     field::goldilocks_field::GoldilocksField,
     hash::{hash_types::HashOut, poseidon::PoseidonHash},
-    plonk::config::{GenericHashOut, Hasher},
+    plonk::config::Hasher,
 };
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::statement::Statement;
 use crate::F;
