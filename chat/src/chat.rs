@@ -1,5 +1,7 @@
 mod input;
 mod loader;
+mod name;
+mod podcount;
 
 use crate::logic::{get_current_version, Logic};
 use gpui::{
@@ -9,6 +11,8 @@ use gpui::{
 use gpui::{View, VisualContext};
 use input::TextInput;
 use loader::Loader;
+use name::Name;
+use podcount::Podcount;
 use std::sync::Arc;
 
 actions!(chat, [Enter]);
@@ -17,6 +21,7 @@ pub struct Chat {
     logic: Arc<Logic>,
     message_input: View<TextInput>,
     loader: View<Loader>,
+    podcount: View<Podcount>,
     scroll_handle: UniformListScrollHandle,
 }
 
@@ -30,7 +35,7 @@ impl Chat {
         .detach();
 
         let mut message_watch = logic.get_message_watch();
-        let mut initial_sync_watch = logic.get_initial_sync_wach();
+        let mut initial_sync_watch = logic.get_initial_sync_watch();
 
         let logic_quit = logic.clone();
         cx.on_app_quit(move |_| {
@@ -67,12 +72,15 @@ impl Chat {
         cx.bind_keys([KeyBinding::new("enter", Enter, None)]);
         let message_input = cx.new_view(TextInput::new);
         let loader = cx.new_view(Loader::new);
+        let logic_pc = logic.clone();
+        let podcount = cx.new_view(|cx| Podcount::new(cx, logic_pc));
         let scroll_handle = UniformListScrollHandle::new();
 
         Self {
             logic,
             message_input,
             loader,
+            podcount,
             scroll_handle,
         }
     }
@@ -82,7 +90,7 @@ impl Chat {
         let message = message_input.read(cx).get_content().to_string();
         let logic = self.logic.clone();
         cx.spawn(|view, mut cx| async move {
-            let _ = logic.send_message(&message).await;
+            let _ = logic.send_message(&message).await.unwrap();
             let _ = cx.update(|cx| {
                 message_input.update(cx, |input, _| input.reset());
                 view.update(cx, |this, cx| {
@@ -108,6 +116,13 @@ impl Render for Chat {
         let view = cx.view().clone();
         let messages = self.logic.get_messages();
         let initial_sync = self.logic.get_initial_sync();
+        let logic = self.logic.clone();
+
+        let name_views: Vec<View<Name>> = messages
+            .iter()
+            .map(|(pubkey, _)| cx.new_view(|cx| Name::new(cx, *pubkey, logic.clone())))
+            .collect();
+
         if initial_sync {
             div()
                 .child(
@@ -155,8 +170,19 @@ impl Render for Chat {
                                 .justify_center()
                                 .size_full()
                                 .text_xs()
-                                .text_color(rgba(0x00000030))
-                                .child(format!("chat v{}", get_current_version())),
+                                .child(div().w_32())
+                                .child(
+                                    div()
+                                        .text_color(rgba(0x00000030))
+                                        .child(format!("chat v{}", get_current_version())),
+                                )
+                                .child(
+                                    div()
+                                        .w_32()
+                                        .flex()
+                                        .justify_end()
+                                        .child(self.podcount.clone()),
+                                ),
                         ),
                 )
                 .key_context("Chat")
@@ -170,15 +196,18 @@ impl Render for Chat {
                 .bg(gpui::white())
                 .child(
                     uniform_list(view, "messages-list", messages.len(), {
+                        let name_views = name_views.clone();
                         move |_, visible_range, _| {
                             visible_range
                                 .map(|ix| {
+                                    let (_, message) = messages.get(ix).unwrap();
+                                    let name_view = &name_views[ix];
                                     div()
-                                        .child(format!(
-                                            "{}: {}",
-                                            messages.get(ix).unwrap().clone().0,
-                                            messages.get(ix).unwrap().clone().1,
-                                        ))
+                                        .flex()
+                                        .flex_row()
+                                        .gap_1()
+                                        .child(name_view.clone())
+                                        .child(message.clone())
                                         .into_any_element()
                                 })
                                 .collect::<Vec<_>>()

@@ -6,6 +6,8 @@ use plonky2::field::types::PrimeField64;
 use plonky2::hash::poseidon::PoseidonHash;
 use plonky2::plonk::config::Hasher;
 use rand::Rng;
+use serde::Deserialize;
+use serde::Serialize;
 
 const BIG_GROUP_GEN: GoldilocksField = GoldilocksField(14293326489335486720);
 
@@ -28,12 +30,12 @@ pub struct SchnorrSecretKey {
     pub sk: u64,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SchnorrPublicKey {
     pub pk: GoldilocksField,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct SchnorrSignature {
     pub s: u64,
     pub e: u64,

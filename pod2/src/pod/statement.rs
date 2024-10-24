@@ -4,6 +4,7 @@ use plonky2::field::{
     types::{Field, PrimeField64},
 };
 use std::{collections::HashMap, fmt::Debug};
+use serde::{Deserialize, Serialize};
 
 use super::{
     entry::Entry,
@@ -14,7 +15,7 @@ use super::{
     POD,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AnchoredKey(pub Origin, pub String);
 
 impl PartialEq for AnchoredKey {
@@ -40,7 +41,7 @@ impl AnchoredKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Statement {
     None,
     ValueOf(AnchoredKey, ScalarOrVec),

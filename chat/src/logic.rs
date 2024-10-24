@@ -1,18 +1,26 @@
 mod auto_update;
+mod identity;
 mod message;
 mod persistence;
+mod pods;
 
 use auto_update::AutoUpdater;
 pub use auto_update::{get_app_path, get_current_version, is_dev};
 use futures::StreamExt;
+use identity::Identities;
 use iroh::client::Doc;
 use iroh::docs::DocTicket;
 use iroh::net::discovery::pkarr::dht::DhtDiscovery;
 use iroh::net::endpoint::{TransportConfig, VarInt};
 use iroh::net::key::{PublicKey, SecretKey};
 use iroh::{client::docs::LiveEvent, node::DiscoveryConfig};
-use message::{Message, SignedMessage};
-use persistence::get_or_create_secret_key;
+use message::SignedMessage;
+
+use persistence::{get_or_create_schnorr_secret_key, get_or_create_secret_key};
+use pod2::pod::{Entry, POD};
+use pod2::schnorr::SchnorrSecretKey;
+use pods::{get_string_field_elem, PodStore};
+use std::sync::Mutex;
 use std::time::Duration;
 use std::{
     str::FromStr,
@@ -21,14 +29,20 @@ use std::{
 use tokio::sync::watch;
 use tracing::info;
 
+pub use message::Message;
+
 type IrohNode = iroh::node::Node<iroh::blobs::store::fs::Store>;
 
 pub struct Logic {
     iroh: Arc<tokio::sync::RwLock<Option<IrohNode>>>,
     secret_key: SecretKey,
+    schnorr_secret_key: SchnorrSecretKey,
     doc0: Arc<tokio::sync::RwLock<Option<Doc>>>,
     messages: RwLock<Vec<(PublicKey, Message)>>,
+    identities: Mutex<Identities>,
+    pod_store: Arc<Mutex<PodStore>>,
     message_watch: (watch::Sender<()>, watch::Receiver<()>),
+    pod_watch: (watch::Sender<()>, watch::Receiver<()>),
     initial_sync: RwLock<bool>,
     initial_sync_watch: (watch::Sender<()>, watch::Receiver<()>),
     _auto_updater: AutoUpdater,
@@ -39,19 +53,27 @@ const DOC0_TICKET: &str = "docaaacaxeh5eddy2cni7cuu5gail5gaxqqy2loiv6cghg5u45akc
 
 impl Logic {
     pub fn new() -> Self {
-        let message_watch = watch::channel(());
         let secret_key = get_or_create_secret_key();
+        let schnorr_secret_key = get_or_create_schnorr_secret_key();
+
+        let message_watch = watch::channel(());
         let initial_sync_watch = watch::channel(());
+        let pod_watch = watch::channel(());
+
         let auto_updater = AutoUpdater::new();
 
         Self {
             iroh: Arc::new(tokio::sync::RwLock::new(None)),
             secret_key,
+            schnorr_secret_key,
             doc0: Arc::new(tokio::sync::RwLock::new(None)),
             messages: RwLock::new(Vec::new()),
+            identities: Mutex::new(Identities::new()),
+            pod_store: Arc::new(Mutex::new(PodStore::new())),
             message_watch,
             initial_sync: RwLock::new(true),
             initial_sync_watch,
+            pod_watch,
             _auto_updater: auto_updater,
         }
     }
@@ -108,9 +130,9 @@ impl Logic {
                 }
             }
 
-            initial_messages.sort_by_key(|m| *m.1.timestamp());
-            *self.messages.write().unwrap() = initial_messages;
-            self.message_watch.0.send(()).unwrap();
+            for (pubkey, message) in &initial_messages {
+                self.add_message(*pubkey, message);
+            }
         }
         info!("initial messages loaded");
         Ok(())
@@ -130,12 +152,7 @@ impl Logic {
                         if let Ok(content) = iroh.blobs().read_to_bytes(hash).await {
                             if let Ok(m) = SignedMessage::verify_and_decode(&content) {
                                 info!("inserting message");
-                                self.messages.write().unwrap().push(m);
-                                self.messages
-                                    .write()
-                                    .unwrap()
-                                    .sort_by_key(|m| *m.1.timestamp());
-                                self.message_watch.0.send(()).unwrap();
+                                self.add_message(m.0, &m.1);
                             }
                         }
                     }
@@ -151,25 +168,21 @@ impl Logic {
         Ok(())
     }
 
-    pub async fn send_message(&self, message: &str) -> anyhow::Result<()> {
-        info!("sending message: {}", message);
-
-        let message = Message::ChatMessage {
-            timestamp: chrono::Utc::now(),
-            text: message.to_string(),
-        };
+    pub async fn send_message(&self, input: &str) -> anyhow::Result<()> {
+        let message = parse_message_input(input);
 
         let content = SignedMessage::sign_and_encode(&self.secret_key, &message)?;
-        let timestamp = message.timestamp().clone();
+        let timestamp = *message.timestamp().unwrap();
 
         let iroh = Arc::clone(&self.iroh);
         let doc0 = Arc::clone(&self.doc0);
 
-        self.messages
-            .write()
-            .unwrap()
-            .push((self.secret_key.public(), message));
+        self.add_message(self.secret_key.public(), &message);
 
+        let schnorr_secret_key = self.schnorr_secret_key.clone();
+        let pod_store = self.pod_store.clone();
+        let input = input.to_string();
+        let pod_watch = self.pod_watch.clone();
         tokio::spawn(async move {
             let iroh = iroh.read().await;
             let doc0 = doc0.read().await;
@@ -177,8 +190,9 @@ impl Logic {
                 let author = iroh.authors().default().await?;
                 doc0.set_bytes(author, timestamp.timestamp_micros().to_string(), content)
                     .await?;
-                info!("message sent");
-                Ok::<_, anyhow::Error>(())
+                store_message_pod(pod_store, schnorr_secret_key, pod_watch.0, &input)?;
+                info!("message sent, pod stored");
+                Ok(())
             } else {
                 anyhow::bail!("Iroh or Doc not initialized")
             }
@@ -186,22 +200,28 @@ impl Logic {
         Ok(())
     }
 
+    pub fn get_name(&self, pubkey: &PublicKey) -> String {
+        self.identities
+            .lock()
+            .unwrap()
+            .get_name(pubkey)
+            .cloned()
+            .unwrap_or_else(|| pubkey.to_string().chars().take(6).collect::<String>())
+    }
+
     pub fn get_initial_sync(&self) -> bool {
         *self.initial_sync.read().unwrap()
     }
 
-    pub fn get_messages(&self) -> Vec<(String, String)> {
-        let m: Vec<(String, String)> = self
+    pub fn get_messages(&self) -> Vec<(PublicKey, String)> {
+        let m: Vec<(PublicKey, String)> = self
             .messages
             .read()
             .map(|msg| msg.clone())
             .unwrap()
             .into_iter()
             .filter_map(|m| match m {
-                (public_key, Message::ChatMessage { timestamp: _, text }) => {
-                    let shortened_pkey: String = public_key.to_string().chars().take(4).collect();
-                    Some((shortened_pkey, text))
-                }
+                (public_key, Message::Chat { timestamp: _, text }) => Some((public_key, text)),
                 _ => None,
             })
             .collect();
@@ -212,8 +232,16 @@ impl Logic {
         self.message_watch.1.clone()
     }
 
-    pub fn get_initial_sync_wach(&self) -> watch::Receiver<()> {
+    pub fn get_initial_sync_watch(&self) -> watch::Receiver<()> {
         self.initial_sync_watch.1.clone()
+    }
+
+    pub fn get_pod_watch(&self) -> watch::Receiver<()> {
+        self.pod_watch.1.clone()
+    }
+
+    pub fn get_num_pods(&self) -> u64 {
+        self.pod_store.lock().unwrap().get_num_pods().unwrap()
     }
 
     pub async fn cleanup(&self) -> anyhow::Result<()> {
@@ -227,4 +255,47 @@ impl Logic {
             .await?;
         Ok(())
     }
+
+    fn add_message(&self, pubkey: PublicKey, message: &Message) {
+        self.messages
+            .write()
+            .unwrap()
+            .push((pubkey, message.clone()));
+        self.identities
+            .lock()
+            .unwrap()
+            .apply_message(pubkey, message);
+        self.messages
+            .write()
+            .unwrap()
+            .sort_by_key(|m| *m.1.timestamp().unwrap());
+        self.message_watch.0.send(()).unwrap();
+    }
+}
+
+fn store_message_pod(
+    pod_store: Arc<Mutex<PodStore>>,
+    schnorr_secret_key: SchnorrSecretKey,
+    pod_watch: watch::Sender<()>,
+    input: &str,
+) -> anyhow::Result<()> {
+    let field_elem = get_string_field_elem(input);
+    let pod = POD::execute_schnorr_gadget(
+        &vec![Entry::new_from_scalar("message", field_elem)],
+        &schnorr_secret_key,
+    );
+    pod_store.lock().unwrap().add_pod(&pod).unwrap();
+    pod_watch.send(()).unwrap();
+    Ok(())
+}
+
+pub fn parse_message_input(input: &str) -> Message {
+    input
+        .strip_prefix('/')
+        .and_then(|cmd| cmd.strip_prefix("name"))
+        .filter(|name| !name.trim().is_empty())
+        .map_or_else(
+            || Message::new_chat(input.to_string()),
+            |name| Message::new_about_me(name.trim().to_string()),
+        )
 }

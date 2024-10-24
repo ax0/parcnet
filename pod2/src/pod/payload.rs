@@ -4,6 +4,7 @@ use plonky2::{
     plonk::config::{GenericHashOut, Hasher},
 };
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
 use super::statement::Statement;
 use crate::F;
@@ -18,7 +19,7 @@ pub trait HashablePayload: Clone + PartialEq {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PODPayload {
     pub statements_list: Vec<(String, Statement)>, // ORDERED list of statements, ordered by names
     pub statements_map: HashMap<String, Statement>,

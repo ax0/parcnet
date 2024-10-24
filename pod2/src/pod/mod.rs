@@ -2,6 +2,9 @@ use anyhow::anyhow;
 use anyhow::Result;
 use plonky2::field::goldilocks_field::GoldilocksField;
 use plonky2::field::types::Field;
+use serde::Deserialize;
+use serde::Serialize;
+
 use plonky2::field::types::PrimeField64;
 use std::collections::HashMap;
 
@@ -32,13 +35,13 @@ pub mod circuit;
 
 pub const SIGNER_PK_KEY: &str = "_signer";
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub enum PODProof {
     Schnorr(SchnorrSignature),
     Oracle(SchnorrSignature),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct POD {
     pub payload: PODPayload,
     proof: PODProof,
