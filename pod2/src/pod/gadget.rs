@@ -5,4 +5,5 @@ pub enum GadgetID {
     NONE = 0,
     SCHNORR16 = 1,
     ORACLE = 2,
+    PLONKY = 3, // plonky2 recursive proof
 }
