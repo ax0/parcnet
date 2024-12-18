@@ -1,9 +1,11 @@
 use std::{collections::HashMap, fmt::Debug, iter::zip};
 
 use anyhow::{anyhow, Result};
+use plonky2::field::goldilocks_field::GoldilocksField;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
+    entry::Entry,
     statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef},
     value::ScalarOrVec,
     Op, Origin, Statement,
@@ -39,6 +41,17 @@ pub struct ProtoCustomStatement(String, Vec<String>, AnonCustomStatement);
 pub struct CustomStatement(String, Vec<AnchoredKey>);
 
 impl ProtoCustomStatement {
+    pub fn new<T: Into<String> + Clone>(
+        predicate_name: T,
+        arg_list: &[T],
+        statement_specifier: AnonCustomStatement,
+    ) -> ProtoCustomStatement {
+        ProtoCustomStatement(
+            predicate_name.into(),
+            arg_list.iter().map(|x| x.clone().into()).collect(),
+            statement_specifier,
+        )
+    }
     pub fn predicate(&self) -> String {
         self.0.clone()
     }
@@ -57,9 +70,10 @@ impl ProtoCustomStatement {
         proof_trace: Vec<Op<StatementRef>>,
     ) -> Result<CustomStatement> {
         let arg_vars = self.args();
+        let memory_pod_name = format!("#{}", self.0);
 
         let mut statement_table = statement_table.clone();
-        statement_table.insert("_NONE".to_string(), HashMap::new());
+        statement_table.insert(memory_pod_name.clone(), HashMap::new());
 
         // Check argument arities.
         if args.len() != arg_vars.len() {
@@ -91,8 +105,8 @@ impl ProtoCustomStatement {
                         .ok_or(anyhow!("VALUEOF statement is missing anchored key!"))?
                         .1;
                     statement_table
-                        .get_mut("_NONE")
-                        .ok_or(anyhow!("Missing '_NONE' entry."))?
+                        .get_mut(&memory_pod_name)
+                        .ok_or(anyhow!("Missing {} entry.", memory_pod_name))?
                         .insert(
                             format!("{}:{}", out_statement.predicate(), key),
                             out_statement.clone(),
@@ -179,4 +193,90 @@ where
         )),
         _ => Ok(()),
     }
+}
+
+#[test]
+fn custom_statement_test() -> Result<()> {
+    let is_double = ProtoCustomStatement::new(
+        "ISDOUBLE",
+        &["S1", "S2"],
+        AnonCustomStatement(vec![
+            ProtoStatement::ValueOf(
+                ConstOrVar::Var("Constant".to_string()),
+                ScalarOrVec::Scalar(GoldilocksField(2)),
+            ),
+            ProtoStatement::ProductOf(
+                ConstOrVar::Var("S1".to_string()),
+                ConstOrVar::Var("Constant".to_string()),
+                ConstOrVar::Var("S2".to_string()),
+            ),
+        ]),
+    );
+
+    let mut statement_table = HashMap::new();
+    statement_table.insert("POD1".to_string(), HashMap::new());
+    statement_table.insert("POD2".to_string(), HashMap::new());
+
+    statement_table.get_mut("POD1").ok_or(anyhow!(""))?.insert(
+        "Pop".to_string(),
+        Statement::ValueOf(
+            AnchoredKey(
+                Origin {
+                    origin_id: GoldilocksField(6),
+                    origin_name: "Narnia".to_string(),
+                    gadget_id: super::gadget::GadgetID::SCHNORR16,
+                },
+                "S5".to_string(),
+            ),
+            ScalarOrVec::Scalar(GoldilocksField(25)),
+        ),
+    );
+    statement_table.get_mut("POD2").ok_or(anyhow!(""))?.insert(
+        "Pap".to_string(),
+        Statement::ValueOf(
+            AnchoredKey(
+                Origin {
+                    origin_id: GoldilocksField(5),
+                    origin_name: "Hades".to_string(),
+                    gadget_id: super::gadget::GadgetID::SCHNORR16,
+                },
+                "S6".to_string(),
+            ),
+            ScalarOrVec::Scalar(GoldilocksField(50)),
+        ),
+    );
+
+    let proof_trace = vec![
+        <Op<StatementRef>>::NewEntry(Entry::new_from_scalar("Constant", GoldilocksField(2))),
+        <Op<StatementRef>>::ProductOf(
+            StatementRef::new("POD2", "Pap"),
+            StatementRef::new("#ISDOUBLE", "VALUEOF:Constant"),
+            StatementRef::new("POD1", "Pop"),
+        ),
+    ];
+
+    is_double.eval(
+        vec![
+            AnchoredKey(
+                Origin {
+                    origin_id: GoldilocksField(5),
+                    origin_name: "Hades".to_string(),
+                    gadget_id: super::gadget::GadgetID::SCHNORR16,
+                },
+                "S6".to_string(),
+            ),
+            AnchoredKey(
+                Origin {
+                    origin_id: GoldilocksField(6),
+                    origin_name: "Narnia".to_string(),
+                    gadget_id: super::gadget::GadgetID::SCHNORR16,
+                },
+                "S5".to_string(),
+            ),
+        ],
+        &statement_table,
+        proof_trace,
+    )?;
+
+    Ok(())
 }
