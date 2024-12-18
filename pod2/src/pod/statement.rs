@@ -3,7 +3,7 @@ use plonky2::field::{
     goldilocks_field::GoldilocksField,
     types::{Field, PrimeField64},
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Debug};
 
 use super::{
@@ -75,50 +75,27 @@ impl fmt::Display for Statement {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum Statement {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: DeserializeOwned"))]
+pub enum ProtoStatement<T>
+where
+    T: Clone + Debug + Eq + Serialize + DeserializeOwned,
+{
     None,
-    ValueOf(AnchoredKey, ScalarOrVec),
-    Equal(AnchoredKey, AnchoredKey),
-    NotEqual(AnchoredKey, AnchoredKey),
-    Gt(AnchoredKey, AnchoredKey),
-    Lt(AnchoredKey, AnchoredKey),
-    Contains(AnchoredKey, AnchoredKey),
-    SumOf(AnchoredKey, AnchoredKey, AnchoredKey),
-    ProductOf(AnchoredKey, AnchoredKey, AnchoredKey),
-    MaxOf(AnchoredKey, AnchoredKey, AnchoredKey),
+    ValueOf(T, ScalarOrVec),
+    Equal(T, T),
+    NotEqual(T, T),
+    Gt(T, T),
+    Lt(T, T),
+    Contains(T, T),
+    SumOf(T, T, T),
+    ProductOf(T, T, T),
+    MaxOf(T, T, T),
 }
 
+pub type Statement = ProtoStatement<AnchoredKey>;
+
 impl Statement {
-    pub fn predicate(&self) -> &'static str {
-        match self {
-            Statement::None => "NONE",
-            Statement::ValueOf(_, _) => "VALUEOF",
-            Statement::Equal(_, _) => "EQUAL",
-            Statement::NotEqual(_, _) => "NOTEQUAL",
-            Statement::Gt(_, _) => "GT",
-            Statement::Lt(_, _) => "LT",
-            Statement::Contains(_, _) => "CONTAINS",
-            Statement::SumOf(_, _, _) => "SUMOF",
-            Statement::ProductOf(_, _, _) => "PRODUCTOF",
-            Statement::MaxOf(_, _, _) => "MAXOF",
-        }
-    }
-    pub fn code_to_predicate(code: GoldilocksField) -> &'static str {
-        match code.to_canonical_u64() {
-            0 => "NONE",
-            1 => "VALUEOF",
-            2 => "EQUAL",
-            3 => "NOTEQUAL",
-            4 => "GT",
-            5 => "CONTAINS",
-            6 => "SUMOF",
-            7 => "PRODUCTOF",
-            8 => "MAXOF",
-            9 => "LT",
-            _ => "",
-        }
-    }
     pub fn from_entry(entry: &Entry, this_gadget_id: GadgetID) -> Self {
         Self::ValueOf(
             AnchoredKey(
@@ -128,31 +105,7 @@ impl Statement {
             entry.value.clone(),
         )
     }
-    // Statement codes
-    pub const NONE: GoldilocksField = GoldilocksField::ZERO;
-    pub const VALUE_OF: GoldilocksField = GoldilocksField(1);
-    pub const EQUAL: GoldilocksField = GoldilocksField(2);
-    pub const NOT_EQUAL: GoldilocksField = GoldilocksField(3);
-    pub const GT: GoldilocksField = GoldilocksField(4);
-    pub const CONTAINS: GoldilocksField = GoldilocksField(5);
-    pub const SUM_OF: GoldilocksField = GoldilocksField(6);
-    pub const PRODUCT_OF: GoldilocksField = GoldilocksField(7);
-    pub const MAX_OF: GoldilocksField = GoldilocksField(8);
-    pub const LT: GoldilocksField = GoldilocksField(9);
-    pub fn code(&self) -> GoldilocksField {
-        match self {
-            Self::None => Self::NONE,
-            Self::ValueOf(_, _) => Self::VALUE_OF,
-            Self::Equal(_, _) => Self::EQUAL,
-            Self::NotEqual(_, _) => Self::NOT_EQUAL,
-            Self::Gt(_, _) => Self::GT,
-            Self::Contains(_, _) => Self::CONTAINS,
-            Self::SumOf(_, _, _) => Self::SUM_OF,
-            Self::ProductOf(_, _, _) => Self::PRODUCT_OF,
-            Self::MaxOf(_, _, _) => Self::MAX_OF,
-            Self::Lt(_, _) => Self::LT,
-        }
-    }
+
     /// Field representation as a vector of length 11.
     /// Each statement is arranged as
     /// [code] ++ anchored_key1 ++ anchored_key2 ++ anchored_key3 ++ [value],
@@ -268,6 +221,68 @@ impl Statement {
             )),
         }
     }
+}
+
+impl<T> ProtoStatement<T>
+where
+    T: Clone + Debug + Eq + Serialize + DeserializeOwned,
+{
+    pub fn predicate(&self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::ValueOf(_, _) => "VALUEOF",
+            Self::Equal(_, _) => "EQUAL",
+            Self::NotEqual(_, _) => "NOTEQUAL",
+            Self::Gt(_, _) => "GT",
+            Self::Lt(_, _) => "LT",
+            Self::Contains(_, _) => "CONTAINS",
+            Self::SumOf(_, _, _) => "SUMOF",
+            Self::ProductOf(_, _, _) => "PRODUCTOF",
+            Self::MaxOf(_, _, _) => "MAXOF",
+        }
+    }
+    pub fn code_to_predicate(code: GoldilocksField) -> &'static str {
+        match code.to_canonical_u64() {
+            0 => "NONE",
+            1 => "VALUEOF",
+            2 => "EQUAL",
+            3 => "NOTEQUAL",
+            4 => "GT",
+            5 => "CONTAINS",
+            6 => "SUMOF",
+            7 => "PRODUCTOF",
+            8 => "MAXOF",
+            9 => "LT",
+            _ => "",
+        }
+    }
+
+    // Statement codes
+    pub const NONE: GoldilocksField = GoldilocksField::ZERO;
+    pub const VALUE_OF: GoldilocksField = GoldilocksField(1);
+    pub const EQUAL: GoldilocksField = GoldilocksField(2);
+    pub const NOT_EQUAL: GoldilocksField = GoldilocksField(3);
+    pub const GT: GoldilocksField = GoldilocksField(4);
+    pub const CONTAINS: GoldilocksField = GoldilocksField(5);
+    pub const SUM_OF: GoldilocksField = GoldilocksField(6);
+    pub const PRODUCT_OF: GoldilocksField = GoldilocksField(7);
+    pub const MAX_OF: GoldilocksField = GoldilocksField(8);
+    pub const LT: GoldilocksField = GoldilocksField(9);
+    pub fn code(&self) -> GoldilocksField {
+        match self {
+            Self::None => Self::NONE,
+            Self::ValueOf(_, _) => Self::VALUE_OF,
+            Self::Equal(_, _) => Self::EQUAL,
+            Self::NotEqual(_, _) => Self::NOT_EQUAL,
+            Self::Gt(_, _) => Self::GT,
+            Self::Contains(_, _) => Self::CONTAINS,
+            Self::SumOf(_, _, _) => Self::SUM_OF,
+            Self::ProductOf(_, _, _) => Self::PRODUCT_OF,
+            Self::MaxOf(_, _, _) => Self::MAX_OF,
+            Self::Lt(_, _) => Self::LT,
+        }
+    }
+
     // Misc helpers
     pub fn value(&self) -> Result<ScalarOrVec> {
         match self {
@@ -275,7 +290,7 @@ impl Statement {
             _ => Err(anyhow!("Statement {:?} does not contain a value.", self)),
         }
     }
-    pub fn anchored_keys(&self) -> Vec<AnchoredKey> {
+    pub fn args(&self) -> Vec<T> {
         match self {
             Self::None => vec![],
             Self::ValueOf(anchkey, _) => vec![anchkey.clone()],
@@ -295,19 +310,21 @@ impl Statement {
             }
         }
     }
-    // Helper to get the anchoredkey of a value of statement
-    pub fn value_of_anchored_key(&self) -> Option<AnchoredKey> {
+
+    // Helper to get the anchored key of a value of statement.
+    pub fn value_of_anchored_key(&self) -> Option<T> {
         match self {
-            Statement::ValueOf(key, _) => Some(key.clone()),
+            Self::ValueOf(key, _) => Some(key.clone()),
             _ => None,
         }
     }
-    // Helper to get the result key if it's a ternary statement
-    pub fn result_anchored_key(&self) -> Option<AnchoredKey> {
+
+    // Helper to get the result key if it's a ternary statement.
+    pub fn result_anchored_key(&self) -> Option<T> {
         match self {
-            Statement::SumOf(result, _, _)
-            | Statement::ProductOf(result, _, _)
-            | Statement::MaxOf(result, _, _) => Some(result.clone()),
+            Self::SumOf(result, _, _)
+            | Self::ProductOf(result, _, _)
+            | Self::MaxOf(result, _, _) => Some(result.clone()),
             _ => None,
         }
     }

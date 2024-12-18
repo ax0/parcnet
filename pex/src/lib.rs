@@ -698,7 +698,7 @@ impl PodBuilder {
 
                 for (_, statement) in &pod.payload.statements_list {
                     // Check all anchored keys in the statement
-                    for anchored_key in statement.anchored_keys() {
+                    for anchored_key in statement.args() {
                         if !anchored_key.0.is_self() {
                             let origin_name = anchored_key.0.origin_name.clone();
                             if !used_origin_names.insert(origin_name.clone()) {

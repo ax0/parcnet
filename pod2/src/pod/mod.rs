@@ -26,6 +26,7 @@ pub use operation::Operation as Op;
 pub use operation::OperationCmd as OpCmd;
 pub use statement::Statement;
 
+pub mod custom_statement;
 pub mod entry;
 pub mod gadget;
 pub mod operation;
@@ -353,7 +354,7 @@ impl GPGInput {
                         .statements_list
                         .iter()
                         .flat_map(|(_, s)| {
-                            s.anchored_keys()
+                            s.args()
                                 .iter()
                                 .map(|anchkey| anchkey.clone().0)
                                 .collect::<Vec<_>>()
@@ -497,12 +498,12 @@ mod tests {
         let entry_statement6 = Statement::from_entry(&entry6, GadgetID::NONE);
 
         // Anchored keys for later reference
-        let anchkeys1 = entry_statement1.anchored_keys();
-        let anchkeys2 = entry_statement2.anchored_keys();
-        let _anchkeys3 = entry_statement3.anchored_keys();
-        let anchkeys4 = entry_statement4.anchored_keys();
-        let _anchkeys5 = entry_statement5.anchored_keys();
-        let anchkeys6 = entry_statement6.anchored_keys();
+        let anchkeys1 = entry_statement1.args();
+        let anchkeys2 = entry_statement2.args();
+        let _anchkeys3 = entry_statement3.args();
+        let anchkeys4 = entry_statement4.args();
+        let _anchkeys5 = entry_statement5.args();
+        let anchkeys6 = entry_statement6.args();
 
         // Entry 2's value = entry 1's value + entry 6's value
         let sum_of_statement = Op::SumOf(
@@ -541,10 +542,7 @@ mod tests {
             assert!(
                 Op::EqualityFromEntries(statement.clone(), statement.clone())
                     .eval_with_gadget_id(GadgetID::NONE)?
-                    == Statement::Equal(
-                        statement.anchored_keys()[0].clone(),
-                        statement.anchored_keys()[0].clone()
-                    )
+                    == Statement::Equal(statement.args()[0].clone(), statement.args()[0].clone())
             );
             anyhow::Ok(())
         })?;
@@ -589,13 +587,13 @@ mod tests {
         );
 
         // Gt->Nonequality conversion check
-        let gt_anchkeys = gt_statement.anchored_keys();
+        let gt_anchkeys = gt_statement.args();
         assert!(
             Op::GtToNonequality(gt_statement.clone()).eval_with_gadget_id(GadgetID::NONE)?
                 == Statement::NotEqual(gt_anchkeys[0].clone(), gt_anchkeys[1].clone())
         );
         // Lt->Nonequality conversion check
-        let lt_anchkeys = lt_statement.anchored_keys();
+        let lt_anchkeys = lt_statement.args();
         assert!(
             Op::LtToNonequality(lt_statement.clone()).eval_with_gadget_id(GadgetID::NONE)?
                 == Statement::NotEqual(lt_anchkeys[0].clone(), lt_anchkeys[1].clone())

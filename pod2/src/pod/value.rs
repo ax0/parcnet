@@ -26,7 +26,7 @@ impl HashableEntryValue for Vec<GoldilocksField> {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub enum ScalarOrVec {
     Scalar(GoldilocksField),
     Vector(Vec<GoldilocksField>),
