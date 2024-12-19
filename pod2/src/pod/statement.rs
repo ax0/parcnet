@@ -7,6 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Debug};
 
 use super::{
+    custom_statement::GeneralisedStatement,
     entry::Entry,
     gadget::GadgetID,
     origin::Origin,
@@ -336,12 +337,18 @@ where
 pub trait StatementOrRef: Clone + Debug {
     /// Type of table.
     type StatementTable;
+
+    /// Type of underlying statement
+    type Statement: Into<GeneralisedStatement> + Clone;
+
     /// Resolution procedure.
-    fn deref_cloned(&self, table: &Self::StatementTable) -> Result<Statement>;
+    fn deref_cloned(&self, table: &Self::StatementTable) -> Result<Self::Statement>;
 }
 
 impl StatementOrRef for Statement {
     type StatementTable = ();
+    type Statement = Statement;
+
     fn deref_cloned(&self, _table: &Self::StatementTable) -> Result<Statement> {
         Ok(self.clone())
     }
@@ -353,6 +360,8 @@ pub struct StatementRef(pub String, pub String);
 
 impl StatementOrRef for StatementRef {
     type StatementTable = HashMap<String, HashMap<String, Statement>>;
+    type Statement = Statement;
+
     fn deref_cloned(&self, table: &Self::StatementTable) -> Result<Statement> {
         let StatementRef(parent_name, statement_name) = self;
         table

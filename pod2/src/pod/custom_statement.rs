@@ -1,14 +1,16 @@
 use std::{collections::HashMap, fmt::Debug, iter::zip};
 
 use anyhow::{anyhow, Result};
+use parcnet_pod::pod::value::string_hash;
 use plonky2::field::goldilocks_field::GoldilocksField;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
     entry::Entry,
     statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef},
+    util::hash_string_to_field,
     value::ScalarOrVec,
-    Op, Origin, Statement,
+    Op, Origin, Statement, POD,
 };
 
 /// Encapsulates a constant of some type or a named variable. Used in
@@ -22,6 +24,9 @@ where
     Const(T),
     Var(String),
 }
+
+/// Encapsulates statement arguments.
+pub type StatementArgs = Vec<AnchoredKey>;
 
 /// Encapsulates an anchored key pattern.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +43,38 @@ pub struct AnonCustomStatement(Vec<ProtoStatement<ConstOrVar<AnchoredKeyPattern>
 pub struct ProtoCustomStatement(String, Vec<String>, AnonCustomStatement);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CustomStatement(String, Vec<AnchoredKey>);
+pub enum GeneralisedStatement {
+    Primitive(Statement),
+    Custom(String, StatementArgs),
+}
+
+impl GeneralisedStatement {
+    pub fn args(&self) -> StatementArgs {
+        match self {
+            Self::Primitive(s) => s.args(),
+            Self::Custom(_, args) => args.clone(),
+        }
+    }
+    pub fn code(&self) -> GoldilocksField {
+        match self {
+            Self::Primitive(s) => s.code(),
+            Self::Custom(statement_name, _) => hash_string_to_field(statement_name),
+        }
+    }
+
+    pub fn predicate(&self) -> String {
+        match self {
+            Self::Primitive(s) => s.predicate().into(),
+            Self::Custom(statement_name, _) => statement_name.clone(),
+        }
+    }
+}
+
+impl Into<GeneralisedStatement> for Statement {
+    fn into(self) -> GeneralisedStatement {
+        GeneralisedStatement::Primitive(self)
+    }
+}
 
 impl ProtoCustomStatement {
     pub fn new<T: Into<String> + Clone>(
@@ -65,10 +101,10 @@ impl ProtoCustomStatement {
     /// TODO: Replace proof trace with vector of operation traces.
     pub fn eval(
         &self,
-        args: Vec<AnchoredKey>,
-        statement_table: &<StatementRef as StatementOrRef>::StatementTable,
-        proof_trace: Vec<Op<StatementRef>>,
-    ) -> Result<CustomStatement> {
+        args: StatementArgs,
+        statement_table: &<GeneralisedStatementRef as StatementOrRef>::StatementTable,
+        proof_trace: Vec<Op<GeneralisedStatementRef>>,
+    ) -> Result<GeneralisedStatement> {
         let arg_vars = self.args();
         let memory_pod_name = format!("#{}", self.0);
 
@@ -96,14 +132,13 @@ impl ProtoCustomStatement {
             .iter()
             .map(|op| {
                 let out_statement =
-                    op.execute(super::gadget::GadgetID::ORACLE, &statement_table)?;
+                    op.execute_generalised(super::gadget::GadgetID::ORACLE, &statement_table)?;
 
                 // NewEntry statements may be viewed as variable bindings. We inject these (key, value) pairs into the statement table for later reference.
-                if out_statement.code() == Statement::VALUE_OF {
-                    let key = out_statement
-                        .value_of_anchored_key()
-                        .ok_or(anyhow!("VALUEOF statement is missing anchored key!"))?
-                        .1;
+                if let GeneralisedStatement::Primitive(Statement::ValueOf(ref anchkey, _)) =
+                    out_statement
+                {
+                    let key = anchkey.1.clone();
                     statement_table
                         .get_mut(&memory_pod_name)
                         .ok_or(anyhow!("Missing {} entry.", memory_pod_name))?
@@ -144,20 +179,20 @@ impl ProtoCustomStatement {
                         if AnchoredKey(origin.clone(), key.clone()) != arg =>
                     {
                         Err(anyhow!(
-                            "Prototype {:?} does not match resolution {}.",
+                            "Prototype {:?} does not match resolution {:?}.",
                             prototype,
                             resolution
                         ))
                     },
                     AnchoredKeyPattern(ConstOrVar::Const(origin), ConstOrVar::Var(key_var)) =>
                         if  origin != arg.0 {
-                            Err(anyhow!("Origin in prototype {:?} does not match origin in resolution {}.", prototype, resolution))
+                            Err(anyhow!("Origin in prototype {:?} does not match origin in resolution {:?}.", prototype, resolution))
                         } else {
                             assign_var_and_check(key_var, arg.1, &mut key_bindings)
                         },
                     AnchoredKeyPattern(ConstOrVar::Var(origin_var), ConstOrVar::Const(key)) =>
                         if key != arg.1 {
-                            Err(anyhow!("Key in prototype {:?} does not match key in resolution {}.", prototype, resolution))
+                            Err(anyhow!("Key in prototype {:?} does not match key in resolution {:?}.", prototype, resolution))
                         } else {
                             assign_var_and_check(origin_var, arg.0, &mut origin_bindings)
                         }
@@ -173,7 +208,7 @@ impl ProtoCustomStatement {
             })
         })?;
 
-        Ok(CustomStatement(self.predicate(), args))
+        Ok(GeneralisedStatement::Custom(self.predicate(), args))
     }
 }
 
@@ -197,6 +232,7 @@ where
 
 #[test]
 fn custom_statement_test() -> Result<()> {
+    let primitive = GeneralisedStatement::Primitive;
     let is_double = ProtoCustomStatement::new(
         "ISDOUBLE",
         &["S1", "S2"],
@@ -219,7 +255,7 @@ fn custom_statement_test() -> Result<()> {
 
     statement_table.get_mut("POD1").ok_or(anyhow!(""))?.insert(
         "Pop".to_string(),
-        Statement::ValueOf(
+        primitive(Statement::ValueOf(
             AnchoredKey(
                 Origin {
                     origin_id: GoldilocksField(6),
@@ -229,11 +265,11 @@ fn custom_statement_test() -> Result<()> {
                 "S5".to_string(),
             ),
             ScalarOrVec::Scalar(GoldilocksField(25)),
-        ),
+        )),
     );
     statement_table.get_mut("POD2").ok_or(anyhow!(""))?.insert(
         "Pap".to_string(),
-        Statement::ValueOf(
+        primitive(Statement::ValueOf(
             AnchoredKey(
                 Origin {
                     origin_id: GoldilocksField(5),
@@ -243,15 +279,18 @@ fn custom_statement_test() -> Result<()> {
                 "S6".to_string(),
             ),
             ScalarOrVec::Scalar(GoldilocksField(50)),
-        ),
+        )),
     );
 
     let proof_trace = vec![
-        <Op<StatementRef>>::NewEntry(Entry::new_from_scalar("Constant", GoldilocksField(2))),
-        <Op<StatementRef>>::ProductOf(
-            StatementRef::new("POD2", "Pap"),
-            StatementRef::new("#ISDOUBLE", "VALUEOF:Constant"),
-            StatementRef::new("POD1", "Pop"),
+        <Op<GeneralisedStatementRef>>::NewEntry(Entry::new_from_scalar(
+            "Constant",
+            GoldilocksField(2),
+        )),
+        <Op<GeneralisedStatementRef>>::ProductOf(
+            GeneralisedStatementRef::new("POD2", "Pap"),
+            GeneralisedStatementRef::new("#ISDOUBLE", "VALUEOF:Constant"),
+            GeneralisedStatementRef::new("POD1", "Pop"),
         ),
     ];
 
@@ -279,4 +318,52 @@ fn custom_statement_test() -> Result<()> {
     )?;
 
     Ok(())
+}
+
+/// Typical statement ref type.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct GeneralisedStatementRef(pub String, pub String);
+
+impl StatementOrRef for GeneralisedStatementRef {
+    type StatementTable = HashMap<String, HashMap<String, GeneralisedStatement>>;
+    type Statement = GeneralisedStatement;
+
+    fn deref_cloned(&self, table: &Self::StatementTable) -> Result<GeneralisedStatement> {
+        let Self(parent_name, statement_name) = self;
+        table
+            .get(parent_name)
+            .ok_or(anyhow!(
+                "Statement parent {} missing from statement table!",
+                parent_name
+            ))?
+            .get(statement_name)
+            .ok_or(anyhow!(
+                "Statement {} with parent {} missing from statement table!",
+                statement_name,
+                parent_name
+            ))
+            .cloned()
+    }
+}
+
+impl GeneralisedStatementRef {
+    pub fn new(pod_name: impl Into<String>, statement_name: impl Into<String>) -> Self {
+        Self(pod_name.into(), statement_name.into())
+    }
+    pub fn index_map(pods_list: &[(String, POD)]) -> HashMap<Self, (usize, usize)> {
+        pods_list
+            .iter()
+            .enumerate()
+            .flat_map(|(pod_num, (pod_name, pod))| {
+                pod.payload.statements_list.iter().enumerate().map(
+                    move |(statement_num, (statement_name, _))| {
+                        (
+                            GeneralisedStatementRef(pod_name.clone(), statement_name.clone()),
+                            (pod_num, statement_num),
+                        )
+                    },
+                )
+            })
+            .collect()
+    }
 }

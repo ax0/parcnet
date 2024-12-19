@@ -6,6 +6,7 @@ use plonky2::field::{
 use std::{collections::HashMap, fmt::Debug};
 
 use super::{
+    custom_statement::GeneralisedStatement,
     entry::Entry,
     gadget::GadgetID,
     statement::{Statement, StatementOrRef, StatementRef},
@@ -14,7 +15,7 @@ use super::{
 };
 
 #[derive(Clone, Debug)]
-pub enum Operation<S: StatementOrRef> {
+pub enum Operation<S> {
     None,
     NewEntry(Entry),
     CopyStatement(S),
@@ -32,140 +33,192 @@ pub enum Operation<S: StatementOrRef> {
     MaxOf(S, S, S),
 }
 
-impl Operation<Statement> {
-    /// Operation evaluation when statements are directly specified.
-    pub fn eval_with_gadget_id(&self, gadget_id: GadgetID) -> Result<Statement> {
+impl<S: Into<GeneralisedStatement> + Clone> Operation<S> {
+    // TODO: Clean up.
+    fn project(self) -> Operation<GeneralisedStatement> {
+        type Op = Operation<GeneralisedStatement>;
         match self {
-            Self::None => Ok(Statement::None),
-            Self::NewEntry(entry) => Ok(Statement::from_entry(entry, gadget_id)),
-            Self::CopyStatement(s) => Ok(s.clone()),
-            Self::EqualityFromEntries(
-                Statement::ValueOf(anchkey1, v1),
-                Statement::ValueOf(anchkey2, v2),
-            ) if v1 == v2 => Ok(Statement::Equal(anchkey1.clone(), anchkey2.clone())),
-            Self::NonequalityFromEntries(
-                Statement::ValueOf(anchkey1, v1),
-                Statement::ValueOf(anchkey2, v2),
-            ) if v1 != v2 => Ok(Statement::NotEqual(anchkey1.clone(), anchkey2.clone())),
-            Self::GtFromEntries(
-                Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(v1)),
-                Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(v2)),
+            Self::None => Op::None,
+            Self::NewEntry(entry) => Op::NewEntry(entry),
+            Self::CopyStatement(s) => Op::CopyStatement(s.into()),
+            Self::EqualityFromEntries(s1, s2) => Op::EqualityFromEntries(s1.into(), s2.into()),
+            Self::NonequalityFromEntries(s1, s2) => {
+                Op::NonequalityFromEntries(s1.into(), s2.into())
+            }
+            Self::GtFromEntries(s1, s2) => Op::GtFromEntries(s1.into(), s2.into()),
+            Self::LtFromEntries(s1, s2) => Op::LtFromEntries(s1.into(), s2.into()),
+            Self::TransitiveEqualityFromStatements(s1, s2) => {
+                Op::TransitiveEqualityFromStatements(s1.into(), s2.into())
+            }
+            Self::GtToNonequality(s) => Op::GtToNonequality(s.into()),
+            Self::LtToNonequality(s) => Op::LtToNonequality(s.into()),
+            Self::ContainsFromEntries(s1, s2) => Op::ContainsFromEntries(s1.into(), s2.into()),
+            Self::RenameContainedBy(s1, s2) => Op::RenameContainedBy(s1.into(), s2.into()),
+            Self::SumOf(s1, s2, s3) => Op::SumOf(s1.into(), s2.into(), s3.into()),
+            Self::ProductOf(s1, s2, s3) => Op::ProductOf(s1.into(), s2.into(), s3.into()),
+            Self::MaxOf(s1, s2, s3) => Op::MaxOf(s1.into(), s2.into(), s3.into()),
+        }
+    }
+
+    /// Operation evaluation when statements are directly specified.
+    pub fn generalised_eval_with_gadget_id(
+        &self,
+        gadget_id: GadgetID,
+    ) -> Result<GeneralisedStatement> {
+        type Op = Operation<GeneralisedStatement>;
+        type GS = GeneralisedStatement;
+        let ok_primitive = |s| Ok(GeneralisedStatement::Primitive(s));
+        match self.clone().project() {
+            Op::None => ok_primitive(Statement::None),
+            Op::NewEntry(entry) => ok_primitive(Statement::from_entry(&entry, gadget_id)),
+            Op::CopyStatement(s) => Ok(s),
+            Op::EqualityFromEntries(
+                GS::Primitive(Statement::ValueOf(anchkey1, v1)),
+                GS::Primitive(Statement::ValueOf(anchkey2, v2)),
+            ) if v1 == v2 => ok_primitive(Statement::Equal(anchkey1.clone(), anchkey2.clone())),
+            Op::NonequalityFromEntries(
+                GS::Primitive(Statement::ValueOf(anchkey1, v1)),
+                GS::Primitive(Statement::ValueOf(anchkey2, v2)),
+            ) if v1 != v2 => ok_primitive(Statement::NotEqual(anchkey1.clone(), anchkey2.clone())),
+            Op::GtFromEntries(
+                GS::Primitive(Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(v1))),
+                GS::Primitive(Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(v2))),
             ) if v1.to_canonical_u64() > v2.to_canonical_u64() => {
-                Ok(Statement::Gt(anchkey1.clone(), anchkey2.clone()))
+                ok_primitive(Statement::Gt(anchkey1.clone(), anchkey2.clone()))
             }
-            Self::LtFromEntries(
-                Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(v1)),
-                Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(v2)),
+            Op::LtFromEntries(
+                GS::Primitive(Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(v1))),
+                GS::Primitive(Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(v2))),
             ) if v1.to_canonical_u64() < v2.to_canonical_u64() => {
-                Ok(Statement::Lt(anchkey1.clone(), anchkey2.clone()))
+                ok_primitive(Statement::Lt(anchkey1.clone(), anchkey2.clone()))
             }
-            Self::TransitiveEqualityFromStatements(
-                Statement::Equal(anchkey1, anchkey2),
-                Statement::Equal(anchkey3, anchkey4),
-            ) if anchkey2.eq(anchkey3) => Ok(Statement::Equal(anchkey1.clone(), anchkey4.clone())),
-            Self::GtToNonequality(Statement::Gt(anchkey1, anchkey2)) => {
-                Ok(Statement::NotEqual(anchkey1.clone(), anchkey2.clone()))
+            Op::TransitiveEqualityFromStatements(
+                GS::Primitive(Statement::Equal(anchkey1, anchkey2)),
+                GS::Primitive(Statement::Equal(anchkey3, anchkey4)),
+            ) if anchkey2.eq(&anchkey3) => {
+                ok_primitive(Statement::Equal(anchkey1.clone(), anchkey4.clone()))
             }
-            Self::LtToNonequality(Statement::Lt(anchkey1, anchkey2)) => {
-                Ok(Statement::NotEqual(anchkey1.clone(), anchkey2.clone()))
+            Op::GtToNonequality(GS::Primitive(Statement::Gt(anchkey1, anchkey2))) => {
+                ok_primitive(Statement::NotEqual(anchkey1.clone(), anchkey2.clone()))
             }
-            Self::ContainsFromEntries(
-                Statement::ValueOf(anchkey1, ScalarOrVec::Vector(vec)),
-                Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(scal)),
-            ) if vec.contains(scal) => Ok(Statement::Contains(anchkey1.clone(), anchkey2.clone())),
-            Self::RenameContainedBy(
-                Statement::Contains(anchkey1, anchkey2),
-                Statement::Equal(anchkey3, anchkey4),
-            ) if anchkey1.eq(anchkey3) => {
-                Ok(Statement::Contains(anchkey4.clone(), anchkey2.clone()))
+            Op::LtToNonequality(GS::Primitive(Statement::Lt(anchkey1, anchkey2))) => {
+                ok_primitive(Statement::NotEqual(anchkey1.clone(), anchkey2.clone()))
             }
-            Self::SumOf(
-                Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(x1)),
-                Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(x2)),
-                Statement::ValueOf(anchkey3, ScalarOrVec::Scalar(x3)),
-            ) if *x1 == *x2 + *x3 => Ok(Statement::SumOf(
+            Op::ContainsFromEntries(
+                GS::Primitive(Statement::ValueOf(anchkey1, ScalarOrVec::Vector(vec))),
+                GS::Primitive(Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(scal))),
+            ) if vec.contains(&scal) => {
+                ok_primitive(Statement::Contains(anchkey1.clone(), anchkey2.clone()))
+            }
+            Op::RenameContainedBy(
+                GS::Primitive(Statement::Contains(anchkey1, anchkey2)),
+                GS::Primitive(Statement::Equal(anchkey3, anchkey4)),
+            ) if anchkey1.eq(&anchkey3) => {
+                ok_primitive(Statement::Contains(anchkey4.clone(), anchkey2.clone()))
+            }
+            Op::SumOf(
+                GS::Primitive(Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(x1))),
+                GS::Primitive(Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(x2))),
+                GS::Primitive(Statement::ValueOf(anchkey3, ScalarOrVec::Scalar(x3))),
+            ) if x1 == x2 + x3 => ok_primitive(Statement::SumOf(
                 anchkey1.clone(),
                 anchkey2.clone(),
                 anchkey3.clone(),
             )),
-            Self::ProductOf(
-                Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(x1)),
-                Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(x2)),
-                Statement::ValueOf(anchkey3, ScalarOrVec::Scalar(x3)),
-            ) if *x1 == *x2 * *x3 => Ok(Statement::ProductOf(
+            Op::ProductOf(
+                GS::Primitive(Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(x1))),
+                GS::Primitive(Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(x2))),
+                GS::Primitive(Statement::ValueOf(anchkey3, ScalarOrVec::Scalar(x3))),
+            ) if x1 == x2 * x3 => ok_primitive(Statement::ProductOf(
                 anchkey1.clone(),
                 anchkey2.clone(),
                 anchkey3.clone(),
             )),
-            Self::MaxOf(
-                Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(x1)),
-                Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(x2)),
-                Statement::ValueOf(anchkey3, ScalarOrVec::Scalar(x3)),
+            Op::MaxOf(
+                GS::Primitive(Statement::ValueOf(anchkey1, ScalarOrVec::Scalar(x1))),
+                GS::Primitive(Statement::ValueOf(anchkey2, ScalarOrVec::Scalar(x2))),
+                GS::Primitive(Statement::ValueOf(anchkey3, ScalarOrVec::Scalar(x3))),
             ) if x1.to_canonical_u64()
                 == Ord::max(x2.to_canonical_u64(), x3.to_canonical_u64()) =>
             {
-                Ok(Statement::MaxOf(
+                ok_primitive(Statement::MaxOf(
                     anchkey1.clone(),
                     anchkey2.clone(),
                     anchkey3.clone(),
                 ))
             }
-            _ => Err(anyhow!("Invalid claim: {:?}", self)),
+            _ => Err(anyhow!("Invalid claim: {:?}", self.clone().project())),
         }
     }
 }
 
-impl<S: StatementOrRef> Operation<S> {
+impl Operation<Statement> {
+    /// Operation evaluation when statements are directly specified.
+    pub fn eval_with_gadget_id(&self, gadget_id: GadgetID) -> Result<Statement> {
+        let gen_output = self.generalised_eval_with_gadget_id(gadget_id)?;
+
+        match gen_output {
+            GeneralisedStatement::Primitive(s) => Ok(s),
+            _ => Err(anyhow!(
+                "Evaluation of primitive deduction {:?} resulted in custom statement {:?}!",
+                self,
+                gen_output
+            )),
+        }
+    }
+}
+
+impl<S: StatementOrRef + Clone> Operation<S> {
     /// Resolution of indirect operation specification.
-    pub fn deref_args(&self, table: &S::StatementTable) -> Result<Operation<Statement>> {
-        type Op = Operation<Statement>;
+    pub fn deref_args(&self, table: &S::StatementTable) -> Result<Operation<S::Statement>> {
+        type Op<S> = Operation<<S as StatementOrRef>::Statement>;
         match self {
-            Self::None => Ok(Op::None),
-            Self::NewEntry(e) => Ok(Op::NewEntry(e.clone())),
-            Self::CopyStatement(s) => Ok(Op::CopyStatement(s.deref_cloned(table)?)),
-            Self::EqualityFromEntries(s1, s2) => Ok(Op::EqualityFromEntries(
+            Self::None => Ok(<Op<S>>::None),
+            Self::NewEntry(e) => Ok(<Op<S>>::NewEntry(e.clone())),
+            Self::CopyStatement(s) => Ok(<Op<S>>::CopyStatement(s.deref_cloned(table)?)),
+            Self::EqualityFromEntries(s1, s2) => Ok(<Op<S>>::EqualityFromEntries(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
             )),
-            Self::NonequalityFromEntries(s1, s2) => Ok(Op::NonequalityFromEntries(
+            Self::NonequalityFromEntries(s1, s2) => Ok(<Op<S>>::NonequalityFromEntries(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
             )),
-            Self::GtFromEntries(s1, s2) => Ok(Op::GtFromEntries(
+            Self::GtFromEntries(s1, s2) => Ok(<Op<S>>::GtFromEntries(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
             )),
-            Self::LtFromEntries(s1, s2) => Ok(Op::LtFromEntries(
+            Self::LtFromEntries(s1, s2) => Ok(<Op<S>>::LtFromEntries(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
             )),
             Self::TransitiveEqualityFromStatements(s1, s2) => {
-                Ok(Op::TransitiveEqualityFromStatements(
+                Ok(<Op<S>>::TransitiveEqualityFromStatements(
                     s1.deref_cloned(table)?,
                     s2.deref_cloned(table)?,
                 ))
             }
-            Self::GtToNonequality(s) => Ok(Op::GtToNonequality(s.deref_cloned(table)?)),
-            Self::LtToNonequality(s) => Ok(Op::LtToNonequality(s.deref_cloned(table)?)),
-            Self::ContainsFromEntries(s1, s2) => Ok(Op::ContainsFromEntries(
+            Self::GtToNonequality(s) => Ok(<Op<S>>::GtToNonequality(s.deref_cloned(table)?)),
+            Self::LtToNonequality(s) => Ok(<Op<S>>::LtToNonequality(s.deref_cloned(table)?)),
+            Self::ContainsFromEntries(s1, s2) => Ok(<Op<S>>::ContainsFromEntries(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
             )),
-            Self::RenameContainedBy(s1, s2) => Ok(Op::RenameContainedBy(
+            Self::RenameContainedBy(s1, s2) => Ok(<Op<S>>::RenameContainedBy(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
             )),
-            Self::SumOf(s1, s2, s3) => Ok(Op::SumOf(
-                s1.deref_cloned(table)?,
-                s2.deref_cloned(table)?,
-                s3.deref_cloned(table)?,
-            )),
-            Self::ProductOf(s1, s2, s3) => Ok(Op::ProductOf(
+            Self::SumOf(s1, s2, s3) => Ok(<Op<S>>::SumOf(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
                 s3.deref_cloned(table)?,
             )),
-            Self::MaxOf(s1, s2, s3) => Ok(Op::MaxOf(
+            Self::ProductOf(s1, s2, s3) => Ok(<Op<S>>::ProductOf(
+                s1.deref_cloned(table)?,
+                s2.deref_cloned(table)?,
+                s3.deref_cloned(table)?,
+            )),
+            Self::MaxOf(s1, s2, s3) => Ok(<Op<S>>::MaxOf(
                 s1.deref_cloned(table)?,
                 s2.deref_cloned(table)?,
                 s3.deref_cloned(table)?,
@@ -235,8 +288,13 @@ impl<S: StatementOrRef> Operation<S> {
             _ => Err(anyhow!("Operator {:?} does not have an entry.", self)),
         }
     }
-    pub fn execute(&self, gadget_id: GadgetID, table: &S::StatementTable) -> Result<Statement> {
-        self.deref_args(table)?.eval_with_gadget_id(gadget_id)
+    pub fn execute_generalised(
+        &self,
+        gadget_id: GadgetID,
+        table: &S::StatementTable,
+    ) -> Result<GeneralisedStatement> {
+        self.deref_args(table)?
+            .generalised_eval_with_gadget_id(gadget_id)
     }
 }
 
@@ -251,6 +309,13 @@ impl OperationCmd {
 }
 
 impl Operation<StatementRef> {
+    pub fn execute(
+        &self,
+        gadget_id: GadgetID,
+        table: &<StatementRef as StatementOrRef>::StatementTable,
+    ) -> Result<Statement> {
+        self.deref_args(table)?.eval_with_gadget_id(gadget_id)
+    }
     /// Representation of operation command as field vector of length
     /// 9 + VL of the form
     /// [code] ++ [pod_num1, statement_num1] ++ [pod_num2,
