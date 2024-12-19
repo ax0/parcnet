@@ -25,8 +25,23 @@ where
     Var(String),
 }
 
+impl<T> ConstOrVar<T>
+where
+    T: Clone + Debug + Eq + Serialize + DeserializeOwned,
+{
+    pub fn constant(t: impl Into<T>) -> Self {
+        Self::Const(t.into())
+    }
+
+    pub fn variable(var_name: impl Into<String>) -> Self {
+        Self::Var(var_name.into())
+    }
+}
+
+pub type ProtoStatementArgs<T> = Vec<T>;
+
 /// Encapsulates statement arguments.
-pub type StatementArgs = Vec<AnchoredKey>;
+pub type StatementArgs = ProtoStatementArgs<AnchoredKey>;
 
 /// Encapsulates an anchored key pattern.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,21 +50,30 @@ pub struct AnchoredKeyPattern(pub ConstOrVar<Origin>, pub ConstOrVar<String>);
 /// Conjunction of statements to form custom statements.
 /// TODO: Replace with enum and generalise.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnonCustomStatement(Vec<ProtoStatement<ConstOrVar<AnchoredKeyPattern>>>);
+pub struct AnonCustomStatement(Vec<ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>);
 
 /// Custom statements as named combinations of names arguments as
 /// defined by `AnonCustomStatement`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtoCustomStatement(String, Vec<String>, AnonCustomStatement);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GeneralisedStatement {
-    Primitive(Statement),
-    Custom(String, StatementArgs),
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: DeserializeOwned"))]
+pub enum ProtoGeneralisedStatement<T>
+where
+    T: Clone + Debug + Eq + Serialize + DeserializeOwned,
+{
+    Primitive(ProtoStatement<T>),
+    Custom(String, ProtoStatementArgs<T>),
 }
 
-impl GeneralisedStatement {
-    pub fn args(&self) -> StatementArgs {
+pub type GeneralisedStatement = ProtoGeneralisedStatement<AnchoredKey>;
+
+impl<T> ProtoGeneralisedStatement<T>
+where
+    T: Clone + Debug + Eq + Serialize + DeserializeOwned,
+{
+    pub fn args(&self) -> ProtoStatementArgs<T> {
         match self {
             Self::Primitive(s) => s.args(),
             Self::Custom(_, args) => args.clone(),
@@ -230,96 +254,6 @@ where
     }
 }
 
-#[test]
-fn custom_statement_test() -> Result<()> {
-    let primitive = GeneralisedStatement::Primitive;
-    let is_double = ProtoCustomStatement::new(
-        "ISDOUBLE",
-        &["S1", "S2"],
-        AnonCustomStatement(vec![
-            ProtoStatement::ValueOf(
-                ConstOrVar::Var("Constant".to_string()),
-                ScalarOrVec::Scalar(GoldilocksField(2)),
-            ),
-            ProtoStatement::ProductOf(
-                ConstOrVar::Var("S1".to_string()),
-                ConstOrVar::Var("Constant".to_string()),
-                ConstOrVar::Var("S2".to_string()),
-            ),
-        ]),
-    );
-
-    let mut statement_table = HashMap::new();
-    statement_table.insert("POD1".to_string(), HashMap::new());
-    statement_table.insert("POD2".to_string(), HashMap::new());
-
-    statement_table.get_mut("POD1").ok_or(anyhow!(""))?.insert(
-        "Pop".to_string(),
-        primitive(Statement::ValueOf(
-            AnchoredKey(
-                Origin {
-                    origin_id: GoldilocksField(6),
-                    origin_name: "Narnia".to_string(),
-                    gadget_id: super::gadget::GadgetID::SCHNORR16,
-                },
-                "S5".to_string(),
-            ),
-            ScalarOrVec::Scalar(GoldilocksField(25)),
-        )),
-    );
-    statement_table.get_mut("POD2").ok_or(anyhow!(""))?.insert(
-        "Pap".to_string(),
-        primitive(Statement::ValueOf(
-            AnchoredKey(
-                Origin {
-                    origin_id: GoldilocksField(5),
-                    origin_name: "Hades".to_string(),
-                    gadget_id: super::gadget::GadgetID::SCHNORR16,
-                },
-                "S6".to_string(),
-            ),
-            ScalarOrVec::Scalar(GoldilocksField(50)),
-        )),
-    );
-
-    let proof_trace = vec![
-        <Op<GeneralisedStatementRef>>::NewEntry(Entry::new_from_scalar(
-            "Constant",
-            GoldilocksField(2),
-        )),
-        <Op<GeneralisedStatementRef>>::ProductOf(
-            GeneralisedStatementRef::new("POD2", "Pap"),
-            GeneralisedStatementRef::new("#ISDOUBLE", "VALUEOF:Constant"),
-            GeneralisedStatementRef::new("POD1", "Pop"),
-        ),
-    ];
-
-    is_double.eval(
-        vec![
-            AnchoredKey(
-                Origin {
-                    origin_id: GoldilocksField(5),
-                    origin_name: "Hades".to_string(),
-                    gadget_id: super::gadget::GadgetID::SCHNORR16,
-                },
-                "S6".to_string(),
-            ),
-            AnchoredKey(
-                Origin {
-                    origin_id: GoldilocksField(6),
-                    origin_name: "Narnia".to_string(),
-                    gadget_id: super::gadget::GadgetID::SCHNORR16,
-                },
-                "S5".to_string(),
-            ),
-        ],
-        &statement_table,
-        proof_trace,
-    )?;
-
-    Ok(())
-}
-
 /// Typical statement ref type.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct GeneralisedStatementRef(pub String, pub String);
@@ -365,5 +299,371 @@ impl GeneralisedStatementRef {
                 )
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use anyhow::{anyhow, Result};
+    use plonky2::field::goldilocks_field::GoldilocksField;
+
+    use crate::pod::{
+        entry::Entry,
+        gadget::GadgetID,
+        statement::{AnchoredKey, ProtoStatement},
+        value::ScalarOrVec,
+        Op, Origin, Statement,
+    };
+
+    use super::{
+        AnchoredKeyPattern, AnonCustomStatement, ConstOrVar, GeneralisedStatement,
+        GeneralisedStatementRef, ProtoCustomStatement, ProtoGeneralisedStatement,
+    };
+
+    #[test]
+    fn custom_statement_test() -> Result<()> {
+        let protoprimitive = <ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>::Primitive;
+        let primitive = GeneralisedStatement::Primitive;
+
+        type X<T> = ConstOrVar<T>;
+        type GSR = GeneralisedStatementRef;
+
+        let is_double = ProtoCustomStatement::new(
+            "ISDOUBLE",
+            &["S1", "S2"],
+            AnonCustomStatement(vec![
+                protoprimitive(ProtoStatement::ValueOf(
+                    X::variable("Constant"),
+                    ScalarOrVec::Scalar(GoldilocksField(2)),
+                )),
+                protoprimitive(ProtoStatement::ProductOf(
+                    X::variable("S1"),
+                    X::variable("Constant"),
+                    X::variable("S2"),
+                )),
+            ]),
+        );
+
+        let mut statement_table = HashMap::new();
+        statement_table.insert("POD1".to_string(), HashMap::new());
+        statement_table.insert("POD2".to_string(), HashMap::new());
+
+        statement_table.get_mut("POD1").ok_or(anyhow!(""))?.insert(
+            "Pop".to_string(),
+            primitive(Statement::ValueOf(
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(6),
+                        origin_name: "Narnia".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S5".to_string(),
+                ),
+                ScalarOrVec::Scalar(GoldilocksField(25)),
+            )),
+        );
+        statement_table.get_mut("POD2").ok_or(anyhow!(""))?.insert(
+            "Pap".to_string(),
+            primitive(Statement::ValueOf(
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(5),
+                        origin_name: "Hades".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S6".to_string(),
+                ),
+                ScalarOrVec::Scalar(GoldilocksField(50)),
+            )),
+        );
+
+        let proof_trace = vec![
+            <Op<GSR>>::NewEntry(Entry::new_from_scalar("Constant", GoldilocksField(2))),
+            <Op<GSR>>::ProductOf(
+                GSR::new("POD2", "Pap"),
+                GSR::new("#ISDOUBLE", "VALUEOF:Constant"),
+                GSR::new("POD1", "Pop"),
+            ),
+        ];
+
+        is_double.eval(
+            vec![
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(5),
+                        origin_name: "Hades".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S6".to_string(),
+                ),
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(6),
+                        origin_name: "Narnia".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S5".to_string(),
+                ),
+            ],
+            &statement_table,
+            proof_trace,
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn custom_statement_test2() -> Result<()> {
+        let protoprimitive = <ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>::Primitive;
+        let primitive = GeneralisedStatement::Primitive;
+        let protocustom = <ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>::Custom;
+        let custom = GeneralisedStatement::Custom;
+
+        type X<T> = ConstOrVar<T>;
+        type GSR = GeneralisedStatementRef;
+
+        let eth_dos = ProtoCustomStatement::new(
+            "ETHDOS",
+            &["Source", "Destination", "Distance"],
+            AnonCustomStatement(vec![
+                protoprimitive(ProtoStatement::Equal(
+                    X::constant(AnchoredKeyPattern(
+                        X::variable("AttestationPod"),
+                        X::constant("signer"),
+                    )),
+                    X::variable("Intermediate"),
+                )),
+                protoprimitive(ProtoStatement::Equal(
+                    X::constant(AnchoredKeyPattern(
+                        X::variable("AttestationPod"),
+                        X::constant("attestation"),
+                    )),
+                    X::variable("Destination"),
+                )),
+                protoprimitive(ProtoStatement::ValueOf(
+                    X::variable("Constant"),
+                    ScalarOrVec::Scalar(GoldilocksField(1)),
+                )),
+                protoprimitive(ProtoStatement::SumOf(
+                    X::variable("Distance"),
+                    X::variable("Constant"),
+                    X::variable("N"),
+                )),
+                protocustom(
+                    "ETHDOS".to_string(),
+                    vec![
+                        X::variable("Source"),
+                        X::variable("Intermediate"),
+                        X::variable("N"),
+                    ],
+                ),
+            ]),
+        );
+
+        let mut statement_table = HashMap::new();
+        statement_table.insert(
+            "_SELF".to_string(),
+            [
+                (
+                    "PubKey".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin::auto("_SELF".to_string(), crate::pod::gadget::GadgetID::PLONKY),
+                            "signer".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(22222222)),
+                    )),
+                ),
+                (
+                    "Vitalik".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin {
+                                origin_id: GoldilocksField(4),
+                                origin_name: "Brussels".to_string(),
+                                gadget_id: GadgetID::SCHNORR16,
+                            },
+                            "attestation".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(11111111)),
+                    )),
+                ),
+                (
+                    "MyETHDoSDistance".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin::auto("_SELF".to_string(), crate::pod::gadget::GadgetID::PLONKY),
+                            "attestation".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(4)),
+                    )),
+                ),
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+        );
+
+        statement_table.insert(
+            "AttPOD".to_string(),
+            [
+                (
+                    "SomeStatement".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin {
+                                origin_id: GoldilocksField(6),
+                                origin_name: "Narnia".to_string(),
+                                gadget_id: GadgetID::SCHNORR16,
+                            },
+                            "signer".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(88888888)),
+                    )),
+                ),
+                (
+                    "SomeOtherStatement".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin {
+                                origin_id: GoldilocksField(6),
+                                origin_name: "Narnia".to_string(),
+                                gadget_id: GadgetID::SCHNORR16,
+                            },
+                            "attestation".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(22222222)),
+                    )),
+                ),
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+        );
+
+        statement_table.insert(
+            "ETHDoSPOD".to_string(),
+            [
+                (
+                    "Fact".to_string(),
+                    custom(
+                        "ETHDOS".to_string(),
+                        vec![
+                            AnchoredKey(
+                                Origin {
+                                    origin_id: GoldilocksField(4),
+                                    origin_name: "Brussels".to_string(),
+                                    gadget_id: GadgetID::SCHNORR16,
+                                },
+                                "source".to_string(),
+                            ),
+                            AnchoredKey(
+                                Origin {
+                                    origin_id: GoldilocksField(4),
+                                    origin_name: "Brussels".to_string(),
+                                    gadget_id: GadgetID::SCHNORR16,
+                                },
+                                "destination".to_string(),
+                            ),
+                            AnchoredKey(
+                                Origin {
+                                    origin_id: GoldilocksField(4),
+                                    origin_name: "Brussels".to_string(),
+                                    gadget_id: GadgetID::SCHNORR16,
+                                },
+                                "distance".to_string(),
+                            ),
+                        ],
+                    ),
+                ),
+                (
+                    "Vitalik".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin {
+                                origin_id: GoldilocksField(4),
+                                origin_name: "Brussels".to_string(),
+                                gadget_id: GadgetID::SCHNORR16,
+                            },
+                            "source".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(11111111)),
+                    )),
+                ),
+                (
+                    "Alice".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin {
+                                origin_id: GoldilocksField(4),
+                                origin_name: "Brussels".to_string(),
+                                gadget_id: GadgetID::SCHNORR16,
+                            },
+                            "destination".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(88888888)),
+                    )),
+                ),
+                (
+                    "Distance".to_string(),
+                    primitive(Statement::ValueOf(
+                        AnchoredKey(
+                            Origin {
+                                origin_id: GoldilocksField(4),
+                                origin_name: "Brussels".to_string(),
+                                gadget_id: GadgetID::SCHNORR16,
+                            },
+                            "distance".to_string(),
+                        ),
+                        ScalarOrVec::Scalar(GoldilocksField(3)),
+                    )),
+                ),
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+        );
+
+        let proof_trace = vec![
+            <Op<GSR>>::EqualityFromEntries(
+                GSR::new("AttPOD", "SomeStatement"),
+                GSR::new("ETHDoSPOD", "Alice"),
+            ),
+            <Op<GSR>>::EqualityFromEntries(
+                GSR::new("AttPOD", "SomeOtherStatement"),
+                GSR::new("_SELF", "PubKey"),
+            ),
+            <Op<GSR>>::NewEntry(Entry::new_from_scalar("Constant", GoldilocksField(1))),
+            <Op<GSR>>::SumOf(
+                GSR::new("_SELF", "MyETHDoSDistance"),
+                GSR::new("#ETHDOS", "VALUEOF:Constant"),
+                GSR::new("ETHDoSPOD", "Distance"),
+            ),
+            <Op<GSR>>::CopyStatement(GSR::new("ETHDoSPOD", "Fact")),
+        ];
+
+        eth_dos.eval(
+            vec![
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(4),
+                        origin_name: "Brussels".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "source".to_string(),
+                ),
+                AnchoredKey(
+                    Origin::auto("_SELF".to_string(), crate::pod::gadget::GadgetID::PLONKY),
+                    "signer".to_string(),
+                ),
+                AnchoredKey(
+                    Origin::auto("_SELF".to_string(), crate::pod::gadget::GadgetID::PLONKY),
+                    "attestation".to_string(),
+                ),
+            ],
+            &statement_table,
+            proof_trace,
+        )?;
+
+        Ok(())
     }
 }
