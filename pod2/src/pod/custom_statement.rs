@@ -122,122 +122,30 @@ impl ProtoCustomStatement {
     }
     // TODO: Code as hash.
 
-    /// Validation procedure for a custom statement prototype.
-    /// TODO: Replace proof trace with vector of operation traces.
-    pub fn eval(
+    // TODO: Refactor?
+    /// Validation procedure for a custom statement prototype with
+    /// proof trace specified by reference
+    pub fn eval_deref(
         &self,
         args: StatementArgs,
+        operation_table: &HashMap<String, ProtoCustomStatement>,
         statement_table: &<GeneralisedStatementRef as StatementOrRef>::StatementTable,
-        proof_trace: Vec<Op<GeneralisedStatementRef>>,
+        proof_trace: &[GeneralisedOperationWithProof<GeneralisedStatementRef>],
     ) -> Result<GeneralisedStatement> {
-        let arg_vars = self.args();
-        let memory_pod_name = format!("#{}", self.0);
-
         let mut statement_table = statement_table.clone();
-        statement_table.insert(memory_pod_name.clone(), HashMap::new());
+        bind_proof_vars(&self.0, proof_trace, &mut statement_table)?;
 
-        // Check argument arities.
-        if args.len() != arg_vars.len() {
-            return Err(anyhow!(
-                "Statement arity ({}) does not match number of arguments ({}).",
-                arg_vars.len(),
-                args.len()
-            ));
-        }
-
-        // Bind statement args.
-        let mut anchkey_bindings = zip(arg_vars, args.clone()).collect::<HashMap<_, _>>();
-
-        // Construct table for key/origin bindings.
-        let mut key_bindings: HashMap<String, String> = HashMap::new();
-        let mut origin_bindings: HashMap<String, Origin> = HashMap::new();
-
-        // Resolve proof trace.
-        let resolved_trace = proof_trace
+        // Dereference proof trace with respect to statement table.
+        let de_proof_trace = proof_trace
             .iter()
-            .map(|op| {
-                let out_statement =
-                    op.execute_generalised(super::gadget::GadgetID::ORACLE, &statement_table)?;
-
-                // NewEntry statements may be viewed as variable bindings. We inject these (key, value) pairs into the statement table for later reference.
-                if let GeneralisedStatement::Primitive(Statement::ValueOf(ref anchkey, _)) =
-                    out_statement
-                {
-                    let key = anchkey.1.clone();
-                    statement_table
-                        .get_mut(&memory_pod_name)
-                        .ok_or(anyhow!("Missing {} entry.", memory_pod_name))?
-                        .insert(
-                            format!("{}:{}", out_statement.predicate(), key),
-                            out_statement.clone(),
-                        );
-                }
-
-                Ok(out_statement)
-            })
+            .map(|op_with_proof| op_with_proof.deref_args(&mut statement_table))
             .collect::<Result<Vec<_>>>()?;
 
-        // Check against existing bindings and bind as we go along, throwing if there is a discrepancy.
-        zip(self.2 .0.clone(), resolved_trace).try_for_each(|(prototype, resolution)| {
-            // Check predicates.
-            if prototype.predicate() != resolution.predicate() {
-                return Err(anyhow!(
-                    "Predicate mismatch: Prototype requires {} while proof trace yields {}.",
-                    prototype.predicate(),
-                    resolution.predicate()
-                ));
-            }
-
-            // Check args by resolving each prototype variable in
-            // the appropriate table. If it is not present, insert
-            // the corresponding arg from the resolved trace, else
-            // check that the value present matches up.
-            let prototype_args = prototype.args();
-            let resolution_args = resolution.args();
-
-            zip(prototype_args, resolution_args).try_for_each(|(proto_arg, arg)| match proto_arg {
-                ConstOrVar::Var(anchkey_var) => {
-                    assign_var_and_check(anchkey_var, arg, &mut anchkey_bindings)
-                }
-                ConstOrVar::Const(anchkey_pattern) => match anchkey_pattern {
-                    AnchoredKeyPattern(ConstOrVar::Const(origin), ConstOrVar::Const(key))
-                        if AnchoredKey(origin.clone(), key.clone()) != arg =>
-                    {
-                        Err(anyhow!(
-                            "Prototype {:?} does not match resolution {:?}.",
-                            prototype,
-                            resolution
-                        ))
-                    },
-                    AnchoredKeyPattern(ConstOrVar::Const(origin), ConstOrVar::Var(key_var)) =>
-                        if  origin != arg.0 {
-                            Err(anyhow!("Origin in prototype {:?} does not match origin in resolution {:?}.", prototype, resolution))
-                        } else {
-                            assign_var_and_check(key_var, arg.1, &mut key_bindings)
-                        },
-                    AnchoredKeyPattern(ConstOrVar::Var(origin_var), ConstOrVar::Const(key)) =>
-                        if key != arg.1 {
-                            Err(anyhow!("Key in prototype {:?} does not match key in resolution {:?}.", prototype, resolution))
-                        } else {
-                            assign_var_and_check(origin_var, arg.0, &mut origin_bindings)
-                        }
-                    ,
-                    AnchoredKeyPattern(ConstOrVar::Var(origin_var), ConstOrVar::Var(key_var)) =>
-                        assign_var_and_check(origin_var, arg.0, &mut origin_bindings).and_then(
-                            |_|
-                            assign_var_and_check(key_var, arg.1, &mut key_bindings)
-                            ),
-                    _ => Ok(()),
-
-                },
-            })
-        })?;
-
-        Ok(GeneralisedStatement::Custom(self.predicate(), args))
+        self.eval(args, operation_table, &de_proof_trace)
     }
 
     /// Validation procedure for a custom statement prototype.
-    pub fn eval2(
+    pub fn eval(
         &self,
         args: StatementArgs,
         operation_table: &HashMap<String, ProtoCustomStatement>,
@@ -408,6 +316,7 @@ mod tests {
     use plonky2::field::goldilocks_field::GoldilocksField;
 
     use crate::pod::{
+        custom_operation::{GeneralisedOperation, GeneralisedOperationWithProof},
         entry::Entry,
         gadget::GadgetID,
         statement::{AnchoredKey, ProtoStatement},
@@ -478,15 +387,18 @@ mod tests {
         );
 
         let proof_trace = vec![
-            <Op<GSR>>::NewEntry(Entry::new_from_scalar("Constant", GoldilocksField(2))),
-            <Op<GSR>>::ProductOf(
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::NewEntry(Entry::new_from_scalar(
+                "Constant",
+                GoldilocksField(2),
+            ))),
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::ProductOf(
                 GSR::new("POD2", "Pap"),
                 GSR::new("#ISDOUBLE", "VALUEOF:Constant"),
                 GSR::new("POD1", "Pop"),
-            ),
+            )),
         ];
 
-        is_double.eval(
+        is_double.eval_deref(
             vec![
                 AnchoredKey(
                     Origin {
@@ -505,8 +417,9 @@ mod tests {
                     "S5".to_string(),
                 ),
             ],
+            &HashMap::new(),
             &statement_table,
-            proof_trace,
+            &proof_trace,
         )?;
 
         Ok(())
@@ -722,24 +635,30 @@ mod tests {
         );
 
         let proof_trace = vec![
-            <Op<GSR>>::EqualityFromEntries(
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::EqualityFromEntries(
                 GSR::new("AttPOD", "SomeStatement"),
                 GSR::new("ETHDoSPOD", "Alice"),
-            ),
-            <Op<GSR>>::EqualityFromEntries(
+            )),
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::EqualityFromEntries(
                 GSR::new("AttPOD", "SomeOtherStatement"),
                 GSR::new("_SELF", "PubKey"),
-            ),
-            <Op<GSR>>::NewEntry(Entry::new_from_scalar("Constant", GoldilocksField(1))),
-            <Op<GSR>>::SumOf(
+            )),
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::NewEntry(Entry::new_from_scalar(
+                "Constant",
+                GoldilocksField(1),
+            ))),
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::SumOf(
                 GSR::new("_SELF", "MyETHDoSDistance"),
                 GSR::new("#ETHDOS", "VALUEOF:Constant"),
                 GSR::new("ETHDoSPOD", "Distance"),
-            ),
-            <Op<GSR>>::CopyStatement(GSR::new("ETHDoSPOD", "Fact")),
+            )),
+            GeneralisedOperationWithProof::primitive(<Op<GSR>>::CopyStatement(GSR::new(
+                "ETHDoSPOD",
+                "Fact",
+            ))),
         ];
 
-        eth_dos.eval(
+        eth_dos.eval_deref(
             vec![
                 AnchoredKey(
                     Origin {
@@ -758,8 +677,9 @@ mod tests {
                     "attestation".to_string(),
                 ),
             ],
+            &HashMap::new(),
             &statement_table,
-            proof_trace,
+            &proof_trace,
         )?;
 
         Ok(())

@@ -196,7 +196,7 @@ impl GeneralisedOperationWithProof<GeneralisedStatement> {
                         },
                     )
                     .collect::<Result<Vec<_>>>()?;
-                op_prototype.eval2(statement_args, operation_table, pf)
+                op_prototype.eval(statement_args, operation_table, pf)
             }
             Self(GeneralisedOperation::Primitive(_), _) => {
                 Err(anyhow!("Primitive operations require no proof."))
