@@ -368,13 +368,15 @@ impl StatementOrRef for StatementRef {
             .get(parent_name)
             .ok_or(anyhow!(
                 "Statement parent {} missing from statement table: {:?}",
-                parent_name, table
+                parent_name,
+                table
             ))?
             .get(statement_name)
             .ok_or(anyhow!(
                 "Statement {} with parent {} missing from statement table: {:?}",
                 statement_name,
-                parent_name, table
+                parent_name,
+                table
             ))
             .cloned()
     }

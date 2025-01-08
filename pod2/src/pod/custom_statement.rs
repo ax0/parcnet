@@ -6,7 +6,12 @@ use plonky2::field::goldilocks_field::GoldilocksField;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
-    custom_operation::{bind_proof_vars, GeneralisedOperation, GeneralisedOperationWithProof}, entry::Entry, statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef}, util::hash_string_to_field, value::ScalarOrVec, Op, Origin, Statement, POD
+    custom_operation::{bind_proof_vars, GeneralisedOperation, GeneralisedOperationWithProof},
+    entry::Entry,
+    statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef},
+    util::hash_string_to_field,
+    value::ScalarOrVec,
+    Op, Origin, Statement, POD,
 };
 
 /// Encapsulates a constant of some type or a named variable. Used in
@@ -262,7 +267,7 @@ impl ProtoCustomStatement {
             .map(|op| {
                 let out_statement =
                     op.eval_with_gadget_id(super::gadget::GadgetID::ORACLE, operation_table)?;
-                
+
                 Ok(out_statement)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -359,13 +364,15 @@ impl StatementOrRef for GeneralisedStatementRef {
             .get(parent_name)
             .ok_or(anyhow!(
                 "Statement parent {} missing from statement table: {:?}",
-                parent_name, table
+                parent_name,
+                table
             ))?
             .get(statement_name)
             .ok_or(anyhow!(
                 "Statement {} with parent {} missing from statement table: {:?}",
                 statement_name,
-                parent_name, table
+                parent_name,
+                table
             ))
             .cloned()
     }
