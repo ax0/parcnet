@@ -6,7 +6,7 @@ use plonky2::field::goldilocks_field::GoldilocksField;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
-    custom_operation::GeneralisedOperationWithProof, entry::Entry, statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef}, util::hash_string_to_field, value::ScalarOrVec, Op, Origin, Statement, POD
+    custom_operation::{bind_proof_vars, GeneralisedOperation, GeneralisedOperationWithProof}, entry::Entry, statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef}, util::hash_string_to_field, value::ScalarOrVec, Op, Origin, Statement, POD
 };
 
 /// Encapsulates a constant of some type or a named variable. Used in

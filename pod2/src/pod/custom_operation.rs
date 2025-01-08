@@ -26,39 +26,60 @@ pub enum GeneralisedOperation<S> {
 /// operations, we provide a proof in the form of a sequence (vector)
 /// of operations with their respective proofs.
 pub type GeneralisedOperationProof<S> = Option<Vec<GeneralisedOperationWithProof<S>>>;
+
+pub(crate) fn bind_proof_vars(
+    op_name: &str,
+    pf: &[GeneralisedOperationWithProof<GeneralisedStatementRef>],
+    statement_table: &mut <GeneralisedStatementRef as StatementOrRef>::StatementTable
+) -> Result<()> {
+        let memory_pod_name = format!("#{}", op_name);
+        statement_table.insert(memory_pod_name.clone(), HashMap::new());                
+        pf.iter().try_for_each(|op_with_proof| {
+            /*
+            Add variable bindings to table if necessary.
+             */
+            if let GeneralisedOperationWithProof(GeneralisedOperation::Primitive(Op::NewEntry(entry)), _) = op_with_proof {
+                let key = AnchoredKey(Origin::auto("_SELF".to_string(), GadgetID::ORACLE), entry.key.clone());
+                let statement = GeneralisedStatement::Primitive(Statement::ValueOf(key.clone(), entry.value.clone())
+                );
+                statement_table
+                    .get_mut(&memory_pod_name)
+                    .ok_or(anyhow!("Missing {} entry.", memory_pod_name))?
+                    .insert(
+                        format!("{}:{}", statement.predicate(), key),
+                        statement,
+                    );
+                anyhow::Ok(())
+            }
+            else{
+                Ok(())
+            }
+                })
+}
+
 pub struct GeneralisedOperationWithProof<S>(GeneralisedOperation<S>, GeneralisedOperationProof<S>);
+impl<S> GeneralisedOperationWithProof<S> {
+    pub fn primitive(op: Op<S>) -> Self {
+        Self(GeneralisedOperation::Primitive(op), None)
+    }
+
+    pub fn custom(op_name: &str, arg_list: Vec<S>, pf: Vec<GeneralisedOperationWithProof<S>>) -> Self {
+        Self(GeneralisedOperation::DeduceCustom(op_name.to_string(), arg_list), Some(pf))
+    }
+}
 
 impl GeneralisedOperationWithProof<GeneralisedStatementRef> {
     pub fn deref_args(&self, table: &mut <GeneralisedStatementRef as StatementOrRef>::StatementTable) -> Result<GeneralisedOperationWithProof<GeneralisedStatement>> {
         match self {
             Self(GeneralisedOperation::Primitive(op), None) => op.deref_args(table).map(|o| GeneralisedOperationWithProof::<GeneralisedStatement>(GeneralisedOperation::Primitive(o), None)),
             Self(GeneralisedOperation::DeduceCustom(op_name, op_args), Some(pf)) => {
-                let memory_pod_name = format!("#{}", op_name);
-                table.insert(memory_pod_name.clone(), HashMap::new());                
+                bind_proof_vars(op_name, pf, table)?;
                 
                 let de_args = op_args.iter().map(
                             |arg| arg.deref_cloned(table)
                             ).collect::<Result<Vec<_>>>()?;
-                pf.iter().map(|op_with_proof| {
-                    /*
-                    Add variable bindings to table if necessary.
-                     */
-                    if let GeneralisedOperationWithProof(GeneralisedOperation::Primitive(Op::NewEntry(entry)), _) = op_with_proof {
-                        let key = AnchoredKey(Origin::auto("_SELF".to_string(), GadgetID::ORACLE), entry.key.clone());
-                        let statement = GeneralisedStatement::Primitive(Statement::ValueOf(key.clone(), entry.value.clone())
-                        );
-                        table
-                        .get_mut(&memory_pod_name)
-                        .ok_or(anyhow!("Missing {} entry.", memory_pod_name))?
-                            .insert(
-                                format!("{}:{}", statement.predicate(), key),
-                            statement,
-                            );
-                    }
-                    
+                pf.iter().map(|op_with_proof|
                     op_with_proof.deref_args(table)
-
-                }
                 ).collect::<Result<Vec<GeneralisedOperationWithProof<GeneralisedStatement>>>>().map(
                 |pf|
                 GeneralisedOperationWithProof::<GeneralisedStatement>(
