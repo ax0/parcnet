@@ -26,6 +26,7 @@ pub use operation::Operation as Op;
 pub use operation::OperationCmd as OpCmd;
 pub use statement::Statement;
 
+pub mod custom_operation;
 pub mod custom_statement;
 pub mod entry;
 pub mod gadget;

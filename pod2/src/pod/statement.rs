@@ -339,7 +339,7 @@ pub trait StatementOrRef: Clone + Debug {
     type StatementTable;
 
     /// Type of underlying statement
-    type Statement: Into<GeneralisedStatement> + Clone;
+    type Statement: Into<GeneralisedStatement> + Clone + Debug;
 
     /// Resolution procedure.
     fn deref_cloned(&self, table: &Self::StatementTable) -> Result<Self::Statement>;
@@ -367,14 +367,14 @@ impl StatementOrRef for StatementRef {
         table
             .get(parent_name)
             .ok_or(anyhow!(
-                "Statement parent {} missing from statement table!",
-                parent_name
+                "Statement parent {} missing from statement table: {:?}",
+                parent_name, table
             ))?
             .get(statement_name)
             .ok_or(anyhow!(
-                "Statement {} with parent {} missing from statement table!",
+                "Statement {} with parent {} missing from statement table: {:?}",
                 statement_name,
-                parent_name
+                parent_name, table
             ))
             .cloned()
     }

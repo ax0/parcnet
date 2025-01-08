@@ -35,7 +35,7 @@ pub enum Operation<S> {
 
 impl<S: Into<GeneralisedStatement> + Clone> Operation<S> {
     // TODO: Clean up.
-    fn project(self) -> Operation<GeneralisedStatement> {
+    pub(crate) fn project(self) -> Operation<GeneralisedStatement> {
         type Op = Operation<GeneralisedStatement>;
         match self {
             Self::None => Op::None,

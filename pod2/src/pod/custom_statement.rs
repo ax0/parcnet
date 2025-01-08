@@ -6,11 +6,7 @@ use plonky2::field::goldilocks_field::GoldilocksField;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use super::{
-    entry::Entry,
-    statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef},
-    util::hash_string_to_field,
-    value::ScalarOrVec,
-    Op, Origin, Statement, POD,
+    custom_operation::GeneralisedOperationWithProof, entry::Entry, statement::{AnchoredKey, ProtoStatement, StatementOrRef, StatementRef}, util::hash_string_to_field, value::ScalarOrVec, Op, Origin, Statement, POD
 };
 
 /// Encapsulates a constant of some type or a named variable. Used in
@@ -50,7 +46,7 @@ pub struct AnchoredKeyPattern(pub ConstOrVar<Origin>, pub ConstOrVar<String>);
 /// Conjunction of statements to form custom statements.
 /// TODO: Replace with enum and generalise.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnonCustomStatement(Vec<ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>);
+pub struct AnonCustomStatement(pub Vec<ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>);
 
 /// Custom statements as named combinations of names arguments as
 /// defined by `AnonCustomStatement`.
@@ -234,6 +230,101 @@ impl ProtoCustomStatement {
 
         Ok(GeneralisedStatement::Custom(self.predicate(), args))
     }
+
+    /// Validation procedure for a custom statement prototype.
+    pub fn eval2(
+        &self,
+        args: StatementArgs,
+        operation_table: &HashMap<String, ProtoCustomStatement>,
+        proof_trace: &[GeneralisedOperationWithProof<GeneralisedStatement>],
+    ) -> Result<GeneralisedStatement> {
+        let arg_vars = self.args();
+
+        // Check argument arities.
+        if args.len() != arg_vars.len() {
+            return Err(anyhow!(
+                "Statement arity ({}) does not match number of arguments ({}).",
+                arg_vars.len(),
+                args.len()
+            ));
+        }
+
+        // Bind statement args.
+        let mut anchkey_bindings = zip(arg_vars, args.clone()).collect::<HashMap<_, _>>();
+
+        // Construct table for key/origin bindings.
+        let mut key_bindings: HashMap<String, String> = HashMap::new();
+        let mut origin_bindings: HashMap<String, Origin> = HashMap::new();
+
+        // Resolve proof trace.
+        let resolved_trace = proof_trace
+            .iter()
+            .map(|op| {
+                let out_statement =
+                    op.eval_with_gadget_id(super::gadget::GadgetID::ORACLE, operation_table)?;
+                
+                Ok(out_statement)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Check against existing bindings and bind as we go along, throwing if there is a discrepancy.
+        zip(self.2 .0.clone(), resolved_trace).try_for_each(|(prototype, resolution)| {
+            // Check predicates.
+            if prototype.predicate() != resolution.predicate() {
+                return Err(anyhow!(
+                    "Predicate mismatch: Prototype requires {} while proof trace yields {}.",
+                    prototype.predicate(),
+                    resolution.predicate()
+                ));
+            }
+
+            // Check args by resolving each prototype variable in
+            // the appropriate table. If it is not present, insert
+            // the corresponding arg from the resolved trace, else
+            // check that the value present matches up.
+            let prototype_args = prototype.args();
+            let resolution_args = resolution.args();
+
+            zip(prototype_args, resolution_args).try_for_each(|(proto_arg, arg)| match proto_arg {
+                ConstOrVar::Var(anchkey_var) => {
+                    assign_var_and_check(anchkey_var, arg, &mut anchkey_bindings)
+                }
+                ConstOrVar::Const(anchkey_pattern) => match anchkey_pattern {
+                    AnchoredKeyPattern(ConstOrVar::Const(origin), ConstOrVar::Const(key))
+                        if AnchoredKey(origin.clone(), key.clone()) != arg =>
+                    {
+                        Err(anyhow!(
+                            "Prototype {:?} does not match resolution {:?}.",
+                            prototype,
+                            resolution
+                        ))
+                    },
+                    AnchoredKeyPattern(ConstOrVar::Const(origin), ConstOrVar::Var(key_var)) =>
+                        if  origin != arg.0 {
+                            Err(anyhow!("Origin in prototype {:?} does not match origin in resolution {:?}.", prototype, resolution))
+                        } else {
+                            assign_var_and_check(key_var, arg.1, &mut key_bindings)
+                        },
+                    AnchoredKeyPattern(ConstOrVar::Var(origin_var), ConstOrVar::Const(key)) =>
+                        if key != arg.1 {
+                            Err(anyhow!("Key in prototype {:?} does not match key in resolution {:?}.", prototype, resolution))
+                        } else {
+                            assign_var_and_check(origin_var, arg.0, &mut origin_bindings)
+                        }
+                    ,
+                    AnchoredKeyPattern(ConstOrVar::Var(origin_var), ConstOrVar::Var(key_var)) =>
+                        assign_var_and_check(origin_var, arg.0, &mut origin_bindings).and_then(
+                            |_|
+                            assign_var_and_check(key_var, arg.1, &mut key_bindings)
+                            ),
+                    _ => Ok(()),
+
+                },
+            })
+        })?;
+
+        Ok(GeneralisedStatement::Custom(self.predicate(), args))
+    }
 }
 
 /// Adds variable value to table, checking if the variable has been
@@ -267,14 +358,14 @@ impl StatementOrRef for GeneralisedStatementRef {
         table
             .get(parent_name)
             .ok_or(anyhow!(
-                "Statement parent {} missing from statement table!",
-                parent_name
+                "Statement parent {} missing from statement table: {:?}",
+                parent_name, table
             ))?
             .get(statement_name)
             .ok_or(anyhow!(
-                "Statement {} with parent {} missing from statement table!",
+                "Statement {} with parent {} missing from statement table: {:?}",
                 statement_name,
-                parent_name
+                parent_name, table
             ))
             .cloned()
     }
