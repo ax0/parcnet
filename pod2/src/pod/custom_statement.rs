@@ -684,4 +684,158 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn custom_statement_test3() -> Result<()> {
+        let protoprimitive = <ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>::Primitive;
+        let protocustom = <ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>::Custom;
+        let primitive = GeneralisedStatement::Primitive;
+
+        type X<T> = ConstOrVar<T>;
+        type GSR = GeneralisedStatementRef;
+
+        let is_double = ProtoCustomStatement::new(
+            "ISDOUBLE",
+            &["S1", "S2"],
+            AnonCustomStatement(vec![
+                protoprimitive(ProtoStatement::ValueOf(
+                    X::variable("Constant"),
+                    ScalarOrVec::Scalar(GoldilocksField(2)),
+                )),
+                protoprimitive(ProtoStatement::ProductOf(
+                    X::variable("S1"),
+                    X::variable("Constant"),
+                    X::variable("S2"),
+                )),
+            ]),
+        );
+
+        let is_quadruple = ProtoCustomStatement::new(
+            "ISQUADRUPLE",
+            &["S1", "S2"],
+            AnonCustomStatement(vec![
+                protocustom(
+                    "ISDOUBLE".to_string(),
+                    vec![X::variable("S1"), X::variable("Intermediate")],
+                ),
+                protocustom(
+                    "ISDOUBLE".to_string(),
+                    vec![X::variable("Intermediate"), X::variable("S2")],
+                ),
+            ]),
+        );
+
+        let operation_table = [("ISDOUBLE".to_string(), is_double)].into_iter().collect();
+
+        let mut statement_table = HashMap::new();
+        statement_table.insert("POD1".to_string(), HashMap::new());
+        statement_table.insert("POD2".to_string(), HashMap::new());
+
+        // Will need to introduce an intermediate entry for proof.
+        statement_table.insert("_SELF".to_string(), HashMap::new());
+
+        statement_table.get_mut("POD1").ok_or(anyhow!(""))?.insert(
+            "Pop".to_string(),
+            primitive(Statement::ValueOf(
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(6),
+                        origin_name: "Narnia".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S5".to_string(),
+                ),
+                ScalarOrVec::Scalar(GoldilocksField(25)),
+            )),
+        );
+        statement_table.get_mut("POD2").ok_or(anyhow!(""))?.insert(
+            "Pap".to_string(),
+            primitive(Statement::ValueOf(
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(5),
+                        origin_name: "Hades".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S6".to_string(),
+                ),
+                ScalarOrVec::Scalar(GoldilocksField(100)),
+            )),
+        );
+
+        // Intermediate value introduced as part of 'proof witness'.
+        statement_table.get_mut("_SELF").ok_or(anyhow!(""))?.insert(
+            "Some value".to_string(),
+            primitive(Statement::ValueOf(
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(1),
+                        origin_name: "_SELF".to_string(),
+                        gadget_id: GadgetID::ORACLE,
+                    },
+                    "X0".to_string(),
+                ),
+                ScalarOrVec::Scalar(GoldilocksField(50)),
+            )),
+        );
+
+        let proof_trace = vec![
+            // Step 1: Produce value that is half of the first argument.
+            GeneralisedOperationWithProof::custom(
+                "ISDOUBLE",
+                vec![GSR::new("POD2", "Pap"), GSR::new("_SELF", "Some value")],
+                vec![
+                    GeneralisedOperationWithProof::primitive(<Op<GSR>>::NewEntry(
+                        Entry::new_from_scalar("Constant", GoldilocksField(2)),
+                    )),
+                    GeneralisedOperationWithProof::primitive(<Op<GSR>>::ProductOf(
+                        GSR::new("POD2", "Pap"),
+                        GSR::new("#ISDOUBLE", "VALUEOF:Constant"),
+                        GSR::new("_SELF", "Some value"),
+                    )),
+                ],
+            ),
+            // Step 2: Establish that that value is twice the second argument.
+            GeneralisedOperationWithProof::custom(
+                "ISDOUBLE",
+                vec![GSR::new("_SELF", "Some value"), GSR::new("POD1", "Pop")],
+                vec![
+                    GeneralisedOperationWithProof::primitive(<Op<GSR>>::NewEntry(
+                        Entry::new_from_scalar("Constant", GoldilocksField(2)),
+                    )),
+                    GeneralisedOperationWithProof::primitive(<Op<GSR>>::ProductOf(
+                        GSR::new("_SELF", "Some value"),
+                        GSR::new("#ISDOUBLE", "VALUEOF:Constant"),
+                        GSR::new("POD1", "Pop"),
+                    )),
+                ],
+            ),
+        ];
+
+        is_quadruple.eval_deref(
+            vec![
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(5),
+                        origin_name: "Hades".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S6".to_string(),
+                ),
+                AnchoredKey(
+                    Origin {
+                        origin_id: GoldilocksField(6),
+                        origin_name: "Narnia".to_string(),
+                        gadget_id: GadgetID::SCHNORR16,
+                    },
+                    "S5".to_string(),
+                ),
+            ],
+            &operation_table,
+            &statement_table,
+            &proof_trace,
+        )?;
+
+        Ok(())
+    }
 }

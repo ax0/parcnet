@@ -209,7 +209,7 @@ impl GeneralisedOperationWithProof<GeneralisedStatement> {
 }
 
 #[test]
-fn custom_statement_test() -> Result<()> {
+fn custom_op_test() -> Result<()> {
     let protoprimitive = <ProtoGeneralisedStatement<ConstOrVar<AnchoredKeyPattern>>>::Primitive;
     let primitive = GeneralisedStatement::Primitive;
 
