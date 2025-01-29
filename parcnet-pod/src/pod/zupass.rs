@@ -1,39 +1,13 @@
+use crate::pod::serialisation::{
+    compressed_pt_de, compressed_pt_ser, compressed_sig_de, compressed_sig_ser,
+};
 use crate::pod::Pod;
-use crate::pod::serialisation::{compressed_pt_de, compressed_pt_ser, compressed_sig_de, compressed_sig_ser};
 use babyjubjub_ark::{Point, Signature};
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
 use super::PodEntries;
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PodPcdClaim {
-    entries: PodEntries,
-    #[serde(
-        serialize_with = "compressed_pt_ser",
-        deserialize_with = "compressed_pt_de"
-    )]
-    signer_public_key: Point,
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PodPcdProof {
-    #[serde(
-        serialize_with = "compressed_sig_ser",
-        deserialize_with = "compressed_sig_de"
-    )]
-    signature: Signature,
-}
-
-// PODPCD is the representation of a POD in PCD clients like Zupass.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PodPcd {
-    id: Uuid,
-    claim: PodPcdClaim,
-    proof: PodPcdProof,
-}
 
 #[derive(Serialize, Deserialize)]
 struct ZupassPcdWrapper {
@@ -51,17 +25,59 @@ struct ZupassRequest {
     pcd: ZupassPcdWrapper,
 }
 
-impl PodPcd {
-    pub fn from_pod(pod: Pod) -> Result<Self, Box<dyn std::error::Error>> {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PodPcdClaim {
+    entries: PodEntries,
+    #[serde(
+        serialize_with = "compressed_pt_ser",
+        deserialize_with = "compressed_pt_de"
+    )]
+    signer_public_key: Point,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PodPcdProof {
+    #[serde(
+        serialize_with = "compressed_sig_ser",
+        deserialize_with = "compressed_sig_de"
+    )]
+    signature: Signature,
+}
+
+/// PODPCD is the representation of a POD in PCD clients like Zupass.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PodPcd {
+    id: Uuid,
+    claim: PodPcdClaim,
+    proof: PodPcdProof,
+}
+
+impl Into<PodPcd> for Pod {
+    fn into(self) -> PodPcd {
         let id = Uuid::new_v4();
         let claim = PodPcdClaim {
-            entries: pod.entries,
-            signer_public_key: pod.signer_public_key,
+            entries: self.entries,
+            signer_public_key: self.signer_public_key,
         };
-        let proof = PodPcdProof { signature: pod.signature };
-        Ok(PodPcd { id, claim, proof })
+        let proof = PodPcdProof {
+            signature: self.signature,
+        };
+        PodPcd { id, claim, proof }
     }
+}
 
+impl Into<Pod> for PodPcd {
+    fn into(self) -> Pod {
+        Pod {
+            entries: self.claim.entries,
+            signer_public_key: self.claim.signer_public_key,
+            signature: self.proof.signature,
+        }
+    }
+}
+
+impl PodPcd {
     pub fn make_zupass_url(&self, return_url: &str) -> Result<Url, Box<dyn std::error::Error>> {
         let pcd_json = serde_json::to_string(self)?;
 
@@ -102,7 +118,7 @@ mod tests {
         )
         .unwrap();
 
-        let pod_pcd = PodPcd::from_pod(pod).unwrap();
+        let pod_pcd: PodPcd = pod.into();
 
         let url_str = pod_pcd
             .make_zupass_url_default_return_url()
@@ -126,7 +142,7 @@ mod tests {
         )
         .unwrap();
 
-        let pod_pcd = PodPcd::from_pod(pod).unwrap();
+        let pod_pcd: PodPcd = pod.into();
 
         let url_str = pod_pcd
             .make_zupass_url_default_return_url()
@@ -155,6 +171,29 @@ mod tests {
             parsed_pod_pcd.claim.entries.get("itemSet"),
             Some(&PodValue::String("celestial".to_string()))
         );
-        assert_eq!(parsed_pod_pcd.claim.entries.get("attack"), Some(&PodValue::Int(7)));
+        assert_eq!(
+            parsed_pod_pcd.claim.entries.get("attack"),
+            Some(&PodValue::Int(7))
+        );
+    }
+
+    #[test]
+    fn test_pod_pcd_conversion() {
+        let private_key = vec![0u8; 32]; // Dummy private key for testing
+        let pod = create_pod(
+            &private_key,
+            crate::pod_entries![
+                "attack" => 7,
+                "itemSet" => "celestial",
+                "pod_type" => "item.weapon",
+                "weaponType" => "sword"
+            ],
+        )
+        .unwrap();
+        let pod_pcd: PodPcd = pod.clone().into();
+        let pod2: Pod = pod_pcd.into();
+
+        // Both PODs should match up.
+        assert_eq!(pod, pod2);
     }
 }
